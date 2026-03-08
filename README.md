@@ -1,5 +1,7 @@
 # Sync Tool for EverDrive GB X7
 
+*Disclaimer: This is an unofficial community tool and is not associated with, endorsed by, or affiliated with Krikzz or the official EverDrive brand in any way.*
+
 **⚠️ WARNING: USE AT YOUR OWN RISK. It is highly recommended to test this tool using a secondary or backup SD card first before modifying your primary library.**
 
 A comprehensive, power-user GUI utility built in PowerShell for managing, organizing, and syncing legally backed-up Game Boy and Game Boy Color ROMs to EverDrive-GB X7 (and similar) flash cartridges. 
