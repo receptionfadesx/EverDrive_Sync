@@ -6,7 +6,7 @@
 
 A comprehensive, power-user GUI utility built in PowerShell for managing, organizing, and syncing legally backed-up Game Boy and Game Boy Color ROMs to EverDrive-GB X7 (and similar) flash cartridges. 
 
-![EverDrive Sync Tool GUI](assets/screenshot.png)
+![EverDrive Sync Tool GUI](assets/Screenshot.png)
 
 EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alphabetical directory sorting, and strict folder structures for save files and OS files (e.g., `GBCSYS`, `EDGB`). This script automates the tedious process of formatting, organizing ROMs into series or A-Z folders, standardizing filenames, and ensuring your precious save files remain intact and correctly linked.
 
