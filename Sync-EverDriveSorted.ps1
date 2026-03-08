@@ -262,10 +262,43 @@ $chkBackupSaves.Text = "Backup SD .sav/.srm/.rtc files to PC before cleaning"
 $chkBackupSaves.Checked = $true
 $form.Controls.Add($chkBackupSaves)
 
+# Checkbox: Restore Saves
+$chkRestoreSaves = New-Object System.Windows.Forms.CheckBox
+$chkRestoreSaves.Location = New-Object System.Drawing.Point(85, 395)
+$chkRestoreSaves.Size = New-Object System.Drawing.Size(400, 20)
+$chkRestoreSaves.Text = "Restore saves from PC (Saves_Backup) to SD card"
+$chkRestoreSaves.Checked = $false
+$form.Controls.Add($chkRestoreSaves)
+
+# --- Advanced Sorting Options ---
+# Checkbox: Folders Last
+$chkFoldersLast = New-Object System.Windows.Forms.CheckBox
+$chkFoldersLast.Location = New-Object System.Drawing.Point(85, 420)
+$chkFoldersLast.Size = New-Object System.Drawing.Size(400, 20)
+$chkFoldersLast.Text = "Advanced: Place folders AFTER games in alphabetical sorting"
+$chkFoldersLast.Checked = $false
+$form.Controls.Add($chkFoldersLast)
+
+# Checkbox: Recent Sort
+$chkRecentSort = New-Object System.Windows.Forms.CheckBox
+$chkRecentSort.Location = New-Object System.Drawing.Point(85, 445)
+$chkRecentSort.Size = New-Object System.Drawing.Size(400, 20)
+$chkRecentSort.Text = "Advanced: Sort generated folders (like ROM Hacks) by Date Added"
+$chkRecentSort.Checked = $false
+$form.Controls.Add($chkRecentSort)
+
+# Checkbox: Favorites
+$chkFavorites = New-Object System.Windows.Forms.CheckBox
+$chkFavorites.Location = New-Object System.Drawing.Point(85, 470)
+$chkFavorites.Size = New-Object System.Drawing.Size(400, 20)
+$chkFavorites.Text = "Advanced: Push games in source 'favorites.txt' to top of menu (!)"
+$chkFavorites.Checked = $false
+$form.Controls.Add($chkFavorites)
+
 # Log Box
 $txtLog = New-Object System.Windows.Forms.TextBox
-$txtLog.Location = New-Object System.Drawing.Point(15, 395)
-$txtLog.Size = New-Object System.Drawing.Size(500, 255)
+$txtLog.Location = New-Object System.Drawing.Point(15, 500)
+$txtLog.Size = New-Object System.Drawing.Size(500, 150)
 $txtLog.Multiline = $true
 $txtLog.ScrollBars = "Vertical"
 $txtLog.ReadOnly = $true
@@ -331,7 +364,7 @@ function Copy-ItemsSorted {
 
 # --- Virtual Tree for Reorganization ---
 function Add-ToVirtualTree {
-    param($RootNode, [string]$SourcePath, [string[]]$DestParts, [switch]$FolderOnly)
+    param($RootNode, [string]$SourcePath, [string[]]$DestParts, [switch]$FolderOnly, [System.Collections.Generic.HashSet[string]]$FavoritesList = $null)
     
     $currentNode = $RootNode
     # Filter out empty segments to prevent "empty parts" bug which causes folders to be created instead of files
@@ -356,11 +389,26 @@ function Add-ToVirtualTree {
         }
         
         if ($null -eq $child) {
+            $lastWrite = [datetime]::MinValue
+            if (-not $isFolder -and -not [string]::IsNullOrWhiteSpace($SourcePath) -and (Test-Path -LiteralPath $SourcePath)) {
+                $lastWrite = (Get-Item -LiteralPath $SourcePath).LastWriteTime
+            }
+
+            # Apply favorites prefix if it's a file and matches the favorites list
+            if (-not $isFolder -and $null -ne $FavoritesList -and $FavoritesList.Count -gt 0) {
+                $baseNameNoExt = [System.IO.Path]::GetFileNameWithoutExtension($part)
+                $fuzzyCheck = Get-FuzzyTitle -BaseName $baseNameNoExt
+                if ($FavoritesList.Contains($fuzzyCheck)) {
+                    $part = "! " + $part
+                }
+            }
+
             $child = @{
-                Name       = $part
-                IsFolder   = $isFolder
-                SourcePath = $(if ($isFolder) { $null } else { $SourcePath })
-                Children   = New-Object System.Collections.ArrayList
+                Name          = $part
+                IsFolder      = $isFolder
+                SourcePath    = $(if ($isFolder) { $null } else { $SourcePath })
+                LastWriteTime = $lastWrite
+                Children      = New-Object System.Collections.ArrayList
             }
             [void]$currentNode.Children.Add($child)
         }
@@ -370,11 +418,21 @@ function Add-ToVirtualTree {
 }
 
 function Copy-VirtualTree {
-    param($Node, $CurrentDestPath, $SdCatalog)
+    param($Node, $CurrentDestPath, $SdCatalog, $FoldersLast, $RecentSortActive)
     
     if (-not $Node.Children -or $Node.Children.Count -eq 0) { return }
 
-    $sortedChildren = $Node.Children | Sort-Object -Property @{Expression = { $_.IsFolder }; Descending = $true }, @{Expression = { $_.Name }; Ascending = $true }
+    # Decide Sorting Rules based on parameters and current node
+    $folderSortDesc = if ($FoldersLast) { $false } else { $true }
+    
+    if ($RecentSortActive -and $Node.Name -match '(?i)\[?(ROM Hacks|New Additions|Recent)\]?') {
+        # Sort folders first/last appropriately, then by Date descending
+        $sortedChildren = $Node.Children | Sort-Object -Property @{Expression = { $_.IsFolder }; Descending = $folderSortDesc }, @{Expression = { $_.LastWriteTime }; Descending = $true }
+    }
+    else {
+        # Standard: folder priority, then alphabetical
+        $sortedChildren = $Node.Children | Sort-Object -Property @{Expression = { $_.IsFolder }; Descending = $folderSortDesc }, @{Expression = { $_.Name }; Ascending = $true }
+    }
     
     foreach ($child in $sortedChildren) {
         $targetName = $child.Name
@@ -402,7 +460,7 @@ function Copy-VirtualTree {
                 New-Item -ItemType Directory -Path $targetPath -Force | Out-Null
                 Write-UiMsg "Created Folder: $(Split-Path $targetPath -Leaf)"
             }
-            Copy-VirtualTree -Node $child -CurrentDestPath $targetPath -SdCatalog $SdCatalog
+            Copy-VirtualTree -Node $child -CurrentDestPath $targetPath -SdCatalog $SdCatalog -FoldersLast $FoldersLast -RecentSortActive $RecentSortActive
         }
         else {
             if ([string]::IsNullOrWhiteSpace($child.SourcePath)) {
@@ -790,6 +848,10 @@ $btnStart.Add_Click({
         $chkKeepTags.Enabled = $false
         $chkAZFolders.Enabled = $false
         $chkBackupSaves.Enabled = $false
+        $chkRestoreSaves.Enabled = $false
+        $chkFoldersLast.Enabled = $false
+        $chkRecentSort.Enabled = $false
+        $chkFavorites.Enabled = $false
         $chkRegionUSA.Enabled = $false
         $chkRegionWorld.Enabled = $false
         $chkRegionEur.Enabled = $false
@@ -837,6 +899,23 @@ $btnStart.Add_Click({
             }
 
             $sdCatalog = @{}
+            
+            $favoritesList = New-Object System.Collections.Generic.HashSet[string]
+            if ($chkFavorites.Checked -and $sourceValid) {
+                $favPath = Join-Path $source "favorites.txt"
+                if (Test-Path -LiteralPath $favPath) {
+                    Write-UiMsg "Loading favorites from favorites.txt..."
+                    foreach ($line in Get-Content -LiteralPath $favPath) {
+                        if (-not [string]::IsNullOrWhiteSpace($line)) {
+                            $cleanLine = $line -replace '\s*\([^)]+\)\s*', ' '
+                            $cleanLine = $cleanLine -replace '\s*\[[^\]]+\]\s*', ' '
+                            $cleanLine = $cleanLine -replace '[-_]', ' '
+                            $cleanLine = $cleanLine -replace '\s+', ' '
+                            [void]$favoritesList.Add($cleanLine.Trim().ToLower())
+                        }
+                    }
+                }
+            }
 
             Write-UiMsg "Analyzing files..."
             
@@ -939,7 +1018,7 @@ $btnStart.Add_Click({
                     }
                     $finalRomName = (Get-CleanRomName -BaseName $f.BaseName -PreserveTags:$chkKeepTags.Checked)
                     $destParts += ($finalRomName + $f.Extension)
-                    Add-ToVirtualTree -RootNode $vRoot -SourcePath $f.FullName -DestParts $destParts
+                    Add-ToVirtualTree -RootNode $vRoot -SourcePath $f.FullName -DestParts $destParts -FavoritesList $favoritesList
                     $fuzzy = Get-FuzzyTitle -BaseName $f.BaseName
                     if (-not $romNameMap.ContainsKey($fuzzy)) { $romNameMap[$fuzzy] = $finalRomName }
                 }
@@ -959,7 +1038,7 @@ $btnStart.Add_Click({
                     }
                     $finalRomName = (Get-CleanRomName -BaseName $f.BaseName -PreserveTags:$chkKeepTags.Checked)
                     $destParts += ($finalRomName + $f.Extension)
-                    Add-ToVirtualTree -RootNode $vRoot -SourcePath $f.FullName -DestParts $destParts
+                    Add-ToVirtualTree -RootNode $vRoot -SourcePath $f.FullName -DestParts $destParts -FavoritesList $favoritesList
                     $fuzzy = Get-FuzzyTitle -BaseName $f.BaseName
                     if (-not $romNameMap.ContainsKey($fuzzy)) { $romNameMap[$fuzzy] = $finalRomName }
                 }
@@ -995,7 +1074,7 @@ $btnStart.Add_Click({
                         
                         $finalRomName = (Get-CleanRomName -BaseName $f.BaseName -PreserveTags:$chkKeepTags.Checked)
                         $destParts += ($finalRomName + $f.Extension)
-                        Add-ToVirtualTree -RootNode $vRoot -SourcePath $f.FullName -DestParts $destParts
+                        Add-ToVirtualTree -RootNode $vRoot -SourcePath $f.FullName -DestParts $destParts -FavoritesList $favoritesList
                         
                         $fuzzy = Get-FuzzyTitle -BaseName $f.BaseName
                         if (-not $romNameMap.ContainsKey($fuzzy)) { $romNameMap[$fuzzy] = $finalRomName }
@@ -1147,7 +1226,7 @@ $btnStart.Add_Click({
                     }
                 }
 
-                Copy-VirtualTree -Node $vRoot -CurrentDestPath $dest -SdCatalog $sdCatalog
+                Copy-VirtualTree -Node $vRoot -CurrentDestPath $dest -SdCatalog $sdCatalog -FoldersLast $chkFoldersLast.Checked -RecentSortActive $chkRecentSort.Checked
 
                 # Directly copy non-save files from the GBCSYS Payload directly to the target OS Folder
                 if (-not [string]::IsNullOrWhiteSpace($gbcSysPayload) -and (Test-Path -LiteralPath $gbcSysPayload)) {
@@ -1219,6 +1298,13 @@ $btnStart.Add_Click({
                         }
                         
                         $finalRomName = (Get-CleanRomName -BaseName $f.BaseName -PreserveTags:$chkKeepTags.Checked)
+                        if ($favoritesList.Count -gt 0) {
+                            $fuzzyCheck = Get-FuzzyTitle -BaseName ([System.IO.Path]::GetFileNameWithoutExtension($finalRomName))
+                            if ($favoritesList.Contains($fuzzyCheck)) {
+                                $finalRomName = "! " + $finalRomName
+                            }
+                        }
+
                         $targetHacksPath = $hacksDest
                         foreach ($p in $destParts) {
                             $targetHacksPath = Join-Path $targetHacksPath $p
@@ -1271,6 +1357,26 @@ $btnStart.Add_Click({
                 }
             }
 
+            # --- RESTORE SAVES ---
+            if ($chkRestoreSaves.Checked -and (Test-Path -LiteralPath $source)) {
+                $backupDir = Join-Path $source "Saves_Backup"
+                if (Test-Path -LiteralPath $backupDir) {
+                    Write-UiMsg "Restoring saves from PC to SD..."
+                    $restoredCount = 0
+                    $savesOnPC = Get-ChildItem -LiteralPath $backupDir -File -Recurse | Where-Object { $_.Extension -match '(?i)^\.(sav|rtc|srm|fla)$' }
+                    foreach ($s in $savesOnPC) {
+                        $relPath = $s.FullName.Substring($backupDir.Length).TrimStart('\', '/')
+                        $targetSysPath = Join-Path (Join-Path $dest $osFolder) $relPath
+                        if (-not (Test-Path -LiteralPath (Split-Path $targetSysPath))) {
+                            New-Item -ItemType Directory -Path (Split-Path $targetSysPath) -Force | Out-Null
+                        }
+                        Copy-Item -LiteralPath $s.FullName -Destination $targetSysPath -Force
+                        $restoredCount++
+                    }
+                    Write-UiMsg "Restored $restoredCount files to SD card."
+                }
+            }
+
             Write-UiMsg "----------------------------------------"
             Write-UiMsg "Sync Complete!"
             Write-UiMsg "IMPORTANT: Safely eject your SD card before physically removing it."
@@ -1304,6 +1410,10 @@ $btnStart.Add_Click({
             $chkKeepTags.Enabled = $true
             $chkAZFolders.Enabled = $true
             $chkBackupSaves.Enabled = $true
+            $chkRestoreSaves.Enabled = $true
+            $chkFoldersLast.Enabled = $true
+            $chkRecentSort.Enabled = $true
+            $chkFavorites.Enabled = $true
             $chkRegionUSA.Enabled = $chk1G1R.Checked
             $chkRegionWorld.Enabled = $chk1G1R.Checked
             $chkRegionEur.Enabled = $chk1G1R.Checked

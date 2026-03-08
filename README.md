@@ -21,6 +21,10 @@ EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alpha
   - **System Type Folders**: Sub-option to separate games into distinct `GB` and `GBC` folders.
   - **Series Folders**: Sub-option to automatically identify known franchise titles (e.g., *Pokemon*, *Zelda*, *Mario*) and dynamically cluster similarly named games.
   - **A-Z Folders**: Sub-option to subdivide loose/remaining games into `A-Z` alphabetical folders to prevent directory limits and slow loading.
+- **Advanced Sorting Options (DriveSort-inspired)**:
+  - **Folders Last**: Checkbox to group your game files at the top of the menu and push system/sub-folders to the bottom.
+  - **Recent Additions**: Checkbox to sort generated folders (like `[ROM Hacks]` or `[New Additions]`) by *Date Added* descending, instead of alphabetical, guaranteeing newly downloaded hacks show up first.
+  - **Favorites Prefixing**: Automatically detects a `favorites.txt` in your Source folder. If found, it prefixes the filenames of any matching games with `!` so they get physically forced to the very top of the root SD card menu.
 - **1G1R (1 Game 1 ROM) Filter**: Filters large "No-Intro" sets down to just one version per game, favoring regions in a customizable priority (USA > World > Europe > Japan), and preferring newer revisions, bugfixes, and translation hacks over original base ROMs.
 - **ROM Naming Sanitizer**:
   - Un-nests trailing suffixes. Restructures titles like *"The Legend of Zelda"* to *"Legend of Zelda, The"* for perfect alphabetical sorting.
@@ -52,4 +56,4 @@ EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alpha
 
 ## Save Restorations
 
-If you accidentally wipe your EverDrive or want to restore states from a previous sync, the script maintains your files in a local `Saves_Backup` directory in your Source ROM folder. Use the **Restore Saves (Backup)** button on the GUI to safely push these back to the required system folders without messing up your sync state.
+If you accidentally wipe your EverDrive or want to restore states from a previous sync, the script maintains your files in a local `Saves_Backup` directory in your Source ROM folder. Check the **Restore saves from PC (Saves_Backup) to SD card** checkbox on the GUI to safely push these back to the required system folders when you perform a sync.
