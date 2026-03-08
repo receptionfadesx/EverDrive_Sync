@@ -17,9 +17,10 @@ EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alpha
 - **Smart Sync**: Intelligently updates your SD card by moving existing ROMs/saves locally and only copying new files, drastically speeding up the sync process compared to a full wipe and copy. 
 - **Force Full Copy**: Wipes the SD card and rewrites everything cleanly to fix stubborn alphabetical sorting issues on the flash cart. Protects crucial system folders (e.g., `GBCSYS`, `EDGB`) from being deleted.
 - **Auto-Reorganization & Series Grouping**: 
-  - Automatically identifies known franchise titles (e.g., *Pokemon*, *Zelda*, *Mario*) and creates dedicated folders.
-  - Dynamically clusters similarly named games into series folders (requires at least 3 games).
-  - Subdivides loose/remaining games into `A-Z` alphabetical folders to prevent directory limits and slow loading.
+  - **Auto-Reorganize**: Master toggle to place files onto the SD card in proper alphabetical order.
+  - **System Type Folders**: Sub-option to separate games into distinct `GB` and `GBC` folders.
+  - **Series Folders**: Sub-option to automatically identify known franchise titles (e.g., *Pokemon*, *Zelda*, *Mario*) and dynamically cluster similarly named games.
+  - **A-Z Folders**: Sub-option to subdivide loose/remaining games into `A-Z` alphabetical folders to prevent directory limits and slow loading.
 - **1G1R (1 Game 1 ROM) Filter**: Filters large "No-Intro" sets down to just one version per game, favoring regions in a customizable priority (USA > World > Europe > Japan), and preferring newer revisions, bugfixes, and translation hacks over original base ROMs.
 - **ROM Naming Sanitizer**:
   - Un-nests trailing suffixes. Restructures titles like *"The Legend of Zelda"* to *"Legend of Zelda, The"* for perfect alphabetical sorting.
@@ -28,7 +29,7 @@ EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alpha
 - **Integrated `.zip` Extraction**: Can seamlessly extract `.gb` or `.gbc` ROMs directly from `.zip` archives during the sync process.
 - **Dedicated ROM Hacks Support**: Treat ROM hacks as first-class citizens. Keeps them properly sorted with their own saves without clashing with base games.
 - **Save File & RTC Management**:
-  - Automatically backs up `.sav`, `.rtc`, and `.snap` files from your SD card to your PC before making drastic changes.
+  - Automatically backs up `.sav`, `.srm`, `.rtc`, `.fla`, and `.snap` files from your SD card to your PC before making drastic changes. Perfectly preserves original extensions.
   - Restores saves perfectly, matching them to dynamically renamed ROMs.
   - Routes save files into the correct flat hardware directory (e.g., `GBCSYS/SAVE` or `EDGB/SAVE`).
 
