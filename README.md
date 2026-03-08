@@ -1,8 +1,8 @@
-# EverDrive GB X7 - SD Card Manager & Sync Tool
+# Sync Tool for EverDrive GB X7
 
 **⚠️ WARNING: USE AT YOUR OWN RISK. It is highly recommended to test this tool using a secondary or backup SD card first before modifying your primary library.**
 
-A comprehensive, power-user GUI utility built in PowerShell for managing, organizing, and syncing Game Boy and Game Boy Color ROMs to Krikzz EverDrive-GB X7 (and similar) flash cartridges. 
+A comprehensive, power-user GUI utility built in PowerShell for managing, organizing, and syncing legally backed-up Game Boy and Game Boy Color ROMs to EverDrive-GB X7 (and similar) flash cartridges. 
 
 EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alphabetical directory sorting, and strict folder structures for save files and OS files (e.g., `GBCSYS`, `EDGB`). This script automates the tedious process of formatting, organizing ROMs into series or A-Z folders, standardizing filenames, and ensuring your precious save files remain intact and correctly linked.
 
@@ -38,7 +38,7 @@ EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alpha
 
 1. Right-click `Sync-EverDriveSorted.ps1` and select **Run with PowerShell**.
    *(If prompted by execution policies, you may need to run `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass` in your PowerShell console first).*
-2. **Choose Source**: Select the folder containing your raw Game Boy and Game Boy Color ROMs.
+2. **Choose Source**: Select the folder containing your legally backed-up Game Boy and Game Boy Color ROMs.
 3. **Choose SD Card**: Select the root drive letter of your EverDrive SD card.
 4. **Select Options**: Check the boxes matching your desired library configuration (e.g., 1G1R filtering, auto-sorting).
 5. **Start Sync**: Click the green "Start Sync" button and let the script handle the heavy lifting!

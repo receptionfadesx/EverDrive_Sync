@@ -34,7 +34,7 @@ if (Test-Path -LiteralPath $configPath) {
 
 # Create the Main Form
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "EverDrive GB X7 - SD Card Manager"
+$form.Text = "Sync Tool for EverDrive GB X7"
 $form.Size = New-Object System.Drawing.Size(540, 710)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
@@ -714,6 +714,11 @@ $btnStart.Add_Click({
             $warnMsg = "WARNING: You selected a folder on your System Drive ($sysDrive) as the SD Card destination.`n`nThis script performs DESTRUCTIVE operations (deleting and overwriting files). It is highly recommended to ONLY target an external SD card.`n`nAre you ABSOLUTELY sure you want to proceed and potentially delete files in:`n$destFull ?"
             $res = [System.Windows.Forms.MessageBox]::Show($warnMsg, "DANGER: System Drive Selected", 1, [System.Windows.Forms.MessageBoxIcon]::Warning)
             if ($res -ne [System.Windows.Forms.DialogResult]::OK) { return }
+        }
+        else {
+            $warnMsg2 = "WARNING: This will permanently DELETE all non-system files on drive [$destRoot] (in $destFull).`n`nAre you absolutely sure you want to proceed?"
+            $res2 = [System.Windows.Forms.MessageBox]::Show($warnMsg2, "Confirm Deletion", 1, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            if ($res2 -ne [System.Windows.Forms.DialogResult]::OK) { return }
         }
 
 
