@@ -35,7 +35,7 @@ if (Test-Path -LiteralPath $configPath) {
 # Create the Main Form
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Sync Tool for EverDrive GB X7"
-$form.Size = New-Object System.Drawing.Size(540, 710)
+$form.Size = New-Object System.Drawing.Size(540, 760)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -155,13 +155,34 @@ $form.Controls.Add($btnDest)
 $chkGroup = New-Object System.Windows.Forms.CheckBox
 $chkGroup.Location = New-Object System.Drawing.Point(85, 170)
 $chkGroup.Size = New-Object System.Drawing.Size(400, 20)
-$chkGroup.Text = "Auto-Reorganize (.gb/.gbc to System Folders & Auto-Create Series Folders)"
+$chkGroup.Text = "Auto-Reorganize (Places files onto the SD card in alphabetical order)"
 $chkGroup.Checked = $true
+$chkGroup.Add_CheckedChanged({
+        $chkTypeFolders.Enabled = $chkGroup.Checked
+        $chkSeriesFolders.Enabled = $chkGroup.Checked
+        $chkAZFolders.Enabled = $chkGroup.Checked
+    })
 $form.Controls.Add($chkGroup)
+
+# Checkbox: System Type Folders
+$chkTypeFolders = New-Object System.Windows.Forms.CheckBox
+$chkTypeFolders.Location = New-Object System.Drawing.Point(105, 195)
+$chkTypeFolders.Size = New-Object System.Drawing.Size(400, 20)
+$chkTypeFolders.Text = "Separate games into system folders (GB/GBC)"
+$chkTypeFolders.Checked = $true
+$form.Controls.Add($chkTypeFolders)
+
+# Checkbox: Series Folders
+$chkSeriesFolders = New-Object System.Windows.Forms.CheckBox
+$chkSeriesFolders.Location = New-Object System.Drawing.Point(105, 220)
+$chkSeriesFolders.Size = New-Object System.Drawing.Size(400, 20)
+$chkSeriesFolders.Text = "Auto-Create Series Folders (e.g., Mario, Pokemon)"
+$chkSeriesFolders.Checked = $true
+$form.Controls.Add($chkSeriesFolders)
 
 # Checkbox: Auto-Split Alphabetical
 $chkAZFolders = New-Object System.Windows.Forms.CheckBox
-$chkAZFolders.Location = New-Object System.Drawing.Point(85, 195)
+$chkAZFolders.Location = New-Object System.Drawing.Point(105, 245)
 $chkAZFolders.Size = New-Object System.Drawing.Size(400, 20)
 $chkAZFolders.Text = "Subdivide loose games into A-Z Folders (A, B, C...)"
 $chkAZFolders.Checked = $true
@@ -169,7 +190,7 @@ $form.Controls.Add($chkAZFolders)
 
 # Checkbox: 1G1R Filter
 $chk1G1R = New-Object System.Windows.Forms.CheckBox
-$chk1G1R.Location = New-Object System.Drawing.Point(85, 220)
+$chk1G1R.Location = New-Object System.Drawing.Point(85, 270)
 $chk1G1R.Size = New-Object System.Drawing.Size(400, 20)
 $chk1G1R.Text = "1G1R Filter: Keep only the best region per game"
 $chk1G1R.Checked = $false
@@ -183,7 +204,7 @@ $form.Controls.Add($chk1G1R)
 
 # Region: USA
 $chkRegionUSA = New-Object System.Windows.Forms.CheckBox
-$chkRegionUSA.Location = New-Object System.Drawing.Point(105, 240)
+$chkRegionUSA.Location = New-Object System.Drawing.Point(105, 290)
 $chkRegionUSA.Size = New-Object System.Drawing.Size(80, 20)
 $chkRegionUSA.Text = "USA (1)"
 $chkRegionUSA.Checked = $true
@@ -192,7 +213,7 @@ $form.Controls.Add($chkRegionUSA)
 
 # Region: World
 $chkRegionWorld = New-Object System.Windows.Forms.CheckBox
-$chkRegionWorld.Location = New-Object System.Drawing.Point(185, 240)
+$chkRegionWorld.Location = New-Object System.Drawing.Point(185, 290)
 $chkRegionWorld.Size = New-Object System.Drawing.Size(80, 20)
 $chkRegionWorld.Text = "World (2)"
 $chkRegionWorld.Checked = $true
@@ -201,7 +222,7 @@ $form.Controls.Add($chkRegionWorld)
 
 # Region: Europe
 $chkRegionEur = New-Object System.Windows.Forms.CheckBox
-$chkRegionEur.Location = New-Object System.Drawing.Point(265, 240)
+$chkRegionEur.Location = New-Object System.Drawing.Point(265, 290)
 $chkRegionEur.Size = New-Object System.Drawing.Size(80, 20)
 $chkRegionEur.Text = "Europe (3)"
 $chkRegionEur.Checked = $true
@@ -210,7 +231,7 @@ $form.Controls.Add($chkRegionEur)
 
 # Region: Japan
 $chkRegionJpn = New-Object System.Windows.Forms.CheckBox
-$chkRegionJpn.Location = New-Object System.Drawing.Point(345, 240)
+$chkRegionJpn.Location = New-Object System.Drawing.Point(345, 290)
 $chkRegionJpn.Size = New-Object System.Drawing.Size(80, 20)
 $chkRegionJpn.Text = "Japan (4)"
 $chkRegionJpn.Checked = $true
@@ -219,7 +240,7 @@ $form.Controls.Add($chkRegionJpn)
 
 # Checkbox: Zip Support
 $chkZip = New-Object System.Windows.Forms.CheckBox
-$chkZip.Location = New-Object System.Drawing.Point(85, 270)
+$chkZip.Location = New-Object System.Drawing.Point(85, 320)
 $chkZip.Size = New-Object System.Drawing.Size(400, 20)
 $chkZip.Text = "Extract ROMs from .zip files"
 $chkZip.Checked = $false
@@ -227,7 +248,7 @@ $form.Controls.Add($chkZip)
 
 # Checkbox: Keep Tags
 $chkKeepTags = New-Object System.Windows.Forms.CheckBox
-$chkKeepTags.Location = New-Object System.Drawing.Point(85, 295)
+$chkKeepTags.Location = New-Object System.Drawing.Point(85, 345)
 $chkKeepTags.Size = New-Object System.Drawing.Size(400, 20)
 $chkKeepTags.Text = "Keep Original Tags (Prevents overwriting multiple versions)"
 $chkKeepTags.Checked = $true
@@ -235,15 +256,15 @@ $form.Controls.Add($chkKeepTags)
 
 # Checkbox: Backup Saves
 $chkBackupSaves = New-Object System.Windows.Forms.CheckBox
-$chkBackupSaves.Location = New-Object System.Drawing.Point(85, 320)
+$chkBackupSaves.Location = New-Object System.Drawing.Point(85, 370)
 $chkBackupSaves.Size = New-Object System.Drawing.Size(400, 20)
-$chkBackupSaves.Text = "Backup SD .sav/.rtc files to PC before cleaning"
+$chkBackupSaves.Text = "Backup SD .sav/.srm/.rtc files to PC before cleaning"
 $chkBackupSaves.Checked = $true
 $form.Controls.Add($chkBackupSaves)
 
 # Log Box
 $txtLog = New-Object System.Windows.Forms.TextBox
-$txtLog.Location = New-Object System.Drawing.Point(15, 345)
+$txtLog.Location = New-Object System.Drawing.Point(15, 395)
 $txtLog.Size = New-Object System.Drawing.Size(500, 255)
 $txtLog.Multiline = $true
 $txtLog.ScrollBars = "Vertical"
@@ -254,7 +275,7 @@ $form.Controls.Add($txtLog)
 
 # Progress Bar
 $progressBar = New-Object System.Windows.Forms.ProgressBar
-$progressBar.Location = New-Object System.Drawing.Point(15, 610)
+$progressBar.Location = New-Object System.Drawing.Point(15, 660)
 $progressBar.Size = New-Object System.Drawing.Size(500, 20)
 $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
 $form.Controls.Add($progressBar)
@@ -668,7 +689,7 @@ function Get-SeriesGroups {
 }
 
 $btnStart = New-Object System.Windows.Forms.Button
-$btnStart.Location = New-Object System.Drawing.Point(210, 640)
+$btnStart.Location = New-Object System.Drawing.Point(210, 690)
 $btnStart.Size = New-Object System.Drawing.Size(120, 30)
 $btnStart.Text = "Start Sync"
 $btnStart.BackColor = [System.Drawing.Color]::LightGreen
@@ -762,6 +783,8 @@ $btnStart.Add_Click({
         $btnGbcSysPayload.Enabled = $false
         $btnDest.Enabled = $false
         $chkGroup.Enabled = $false
+        $chkTypeFolders.Enabled = $false
+        $chkSeriesFolders.Enabled = $false
         $chk1G1R.Enabled = $false
         $chkZip.Enabled = $false
         $chkKeepTags.Enabled = $false
@@ -799,7 +822,7 @@ $btnStart.Add_Click({
                     Copy-Item -LiteralPath $s.FullName -Destination $saveDest -Force
                     $saveCount++
                 }
-                Write-UiMsg "Backed up $saveCount save/rtc files."
+                Write-UiMsg "Backed up $saveCount .sav/.srm/.rtc files."
             }
 
             Write-UiMsg "Formatting destination directory (Preserving EverDrive OS folders)..."
@@ -866,7 +889,9 @@ $btnStart.Add_Click({
             }
 
             if ($chkGroup.Checked) {
-                Write-UiMsg "Analyzing files for Series grouping... (This can take 20-40 seconds for massive libraries)"
+                if ($chkSeriesFolders.Checked) {
+                    Write-UiMsg "Analyzing files for Series grouping... (This can take 20-40 seconds for massive libraries)"
+                }
             
                 $gbFiles = @($allFiles | Where-Object { $_.Extension -match '(?i)^\.gb$' })
                 $gbcFiles = @($allFiles | Where-Object { $_.Extension -match '(?i)^\.gbc$' })
@@ -879,8 +904,14 @@ $btnStart.Add_Click({
                     $gbcFiles = Get-BestRegionGames -Files $gbcFiles -USA:$chkRegionUSA.Checked -World:$chkRegionWorld.Checked -Eur:$chkRegionEur.Checked -Jpn:$chkRegionJpn.Checked
                 }
 
-                $gbGroups = Get-SeriesGroups -Files $gbFiles
-                $gbcGroups = Get-SeriesGroups -Files $gbcFiles
+                if ($chkSeriesFolders.Checked) {
+                    $gbGroups = Get-SeriesGroups -Files $gbFiles
+                    $gbcGroups = Get-SeriesGroups -Files $gbcFiles
+                }
+                else {
+                    $gbGroups = @{}
+                    $gbcGroups = @{}
+                }
                 $vRoot = @{ Name = ""; IsFolder = $true; Children = New-Object System.Collections.ArrayList }
                 $romNameMap = @{}
 
@@ -895,8 +926,9 @@ $btnStart.Add_Click({
 
                 # Process GB
                 foreach ($f in $gbFiles) {
-                    $group = $gbGroups[$f.FullName]
-                    $destParts = @("GB")
+                    $group = if ($chkSeriesFolders.Checked) { $gbGroups[$f.FullName] } else { "" }
+                    $destParts = @()
+                    if ($chkTypeFolders.Checked) { $destParts += "GB" }
                     if (-not [string]::IsNullOrWhiteSpace($group)) { $destParts += $group }
                     else {
                         if ($chkAZFolders.Checked) {
@@ -914,8 +946,9 @@ $btnStart.Add_Click({
 
                 # Process GBC
                 foreach ($f in $gbcFiles) {
-                    $group = $gbcGroups[$f.FullName]
-                    $destParts = @("GBC")
+                    $group = if ($chkSeriesFolders.Checked) { $gbcGroups[$f.FullName] } else { "" }
+                    $destParts = @()
+                    if ($chkTypeFolders.Checked) { $destParts += "GBC" }
                     if (-not [string]::IsNullOrWhiteSpace($group)) { $destParts += $group }
                     else {
                         if ($chkAZFolders.Checked) {
@@ -940,11 +973,16 @@ $btnStart.Add_Click({
                         $hackFilesRaw = Get-BestRegionGames -Files $hackFilesRaw -USA:$chkRegionUSA.Checked -World:$chkRegionWorld.Checked -Eur:$chkRegionEur.Checked -Jpn:$chkRegionJpn.Checked
                     }
 
-                    $hackGroups = Get-SeriesGroups -Files $hackFilesRaw
+                    if ($chkSeriesFolders.Checked) {
+                        $hackGroups = Get-SeriesGroups -Files $hackFilesRaw
+                    }
+                    else {
+                        $hackGroups = @{}
+                    }
                     
                     foreach ($f in $hackFilesRaw) {
                         $destParts = @("[ROM Hacks]")
-                        $group = $hackGroups[$f.FullName]
+                        $group = if ($chkSeriesFolders.Checked) { $hackGroups[$f.FullName] } else { "" }
                         
                         if (-not [string]::IsNullOrWhiteSpace($group)) { $destParts += $group }
                         else {
@@ -1259,6 +1297,8 @@ $btnStart.Add_Click({
             $btnDest.Enabled = $true
 
             $chkGroup.Enabled = $true
+            $chkTypeFolders.Enabled = $chkGroup.Checked
+            $chkSeriesFolders.Enabled = $chkGroup.Checked
             $chk1G1R.Enabled = $true
             $chkZip.Enabled = $true
             $chkKeepTags.Enabled = $true
