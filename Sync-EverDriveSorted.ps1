@@ -96,51 +96,23 @@ $btnHacks.Add_Click({
     })
 $form.Controls.Add($btnHacks)
 
-# Destination Label
-$lblDest = New-Object System.Windows.Forms.Label
-$lblDest.Location = New-Object System.Drawing.Point(15, 100)
-$lblDest.Size = New-Object System.Drawing.Size(70, 20)
-$lblDest.Text = "SD Card:"
-$form.Controls.Add($lblDest)
-
-# Destination TextBox
-$txtDest = New-Object System.Windows.Forms.TextBox
-$txtDest.Location = New-Object System.Drawing.Point(85, 97)
-$txtDest.Size = New-Object System.Drawing.Size(305, 20)
-$txtDest.Text = $lastDest
-$form.Controls.Add($txtDest)
-
-# Destination Browse Button
-$btnDest = New-Object System.Windows.Forms.Button
-$btnDest.Location = New-Object System.Drawing.Point(400, 95)
-$btnDest.Size = New-Object System.Drawing.Size(85, 24)
-$btnDest.Text = "Browse..."
-$btnDest.Add_Click({
-        $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-        $dialog.Description = "Select Destination Folder (Your SD Card)"
-        if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-            $txtDest.Text = $dialog.SelectedPath
-        }
-    })
-$form.Controls.Add($btnDest)
-
 # GBCSYS Label
 $lblGbcSysPayload = New-Object System.Windows.Forms.Label
-$lblGbcSysPayload.Location = New-Object System.Drawing.Point(15, 140)
+$lblGbcSysPayload.Location = New-Object System.Drawing.Point(15, 100)
 $lblGbcSysPayload.Size = New-Object System.Drawing.Size(70, 20)
 $lblGbcSysPayload.Text = "GBCSYS:"
 $form.Controls.Add($lblGbcSysPayload)
 
 # GBCSYS Payload TextBox
 $txtGbcSysPayload = New-Object System.Windows.Forms.TextBox
-$txtGbcSysPayload.Location = New-Object System.Drawing.Point(85, 137)
+$txtGbcSysPayload.Location = New-Object System.Drawing.Point(85, 97)
 $txtGbcSysPayload.Size = New-Object System.Drawing.Size(305, 20)
 $txtGbcSysPayload.Text = $lastGbcSysPayload
 $form.Controls.Add($txtGbcSysPayload)
 
 # GBCSYS Payload Browse Button
 $btnGbcSysPayload = New-Object System.Windows.Forms.Button
-$btnGbcSysPayload.Location = New-Object System.Drawing.Point(400, 135)
+$btnGbcSysPayload.Location = New-Object System.Drawing.Point(400, 95)
 $btnGbcSysPayload.Size = New-Object System.Drawing.Size(85, 24)
 $btnGbcSysPayload.Text = "Browse..."
 $btnGbcSysPayload.Add_Click({
@@ -152,29 +124,36 @@ $btnGbcSysPayload.Add_Click({
     })
 $form.Controls.Add($btnGbcSysPayload)
 
-# Checkbox: Delete destination files first
-$chkClean = New-Object System.Windows.Forms.CheckBox
-$chkClean.Location = New-Object System.Drawing.Point(85, 170)
-$chkClean.Size = New-Object System.Drawing.Size(420, 20)
-$chkClean.Text = "Smart Sync (Move existing SD files, delete orphans)"
-$chkClean.Checked = $true
-$form.Controls.Add($chkClean)
+# Destination Label
+$lblDest = New-Object System.Windows.Forms.Label
+$lblDest.Location = New-Object System.Drawing.Point(15, 140)
+$lblDest.Size = New-Object System.Drawing.Size(70, 20)
+$lblDest.Text = "SD Card:"
+$form.Controls.Add($lblDest)
 
-# Checkbox: Force Format
-$chkFormat = New-Object System.Windows.Forms.CheckBox
-$chkFormat.Location = New-Object System.Drawing.Point(85, 195)
-$chkFormat.Size = New-Object System.Drawing.Size(420, 20)
-$chkFormat.Text = "Force Full Copy (Wipes SD to fix hardware alphabetical missing order)"
-$chkFormat.Checked = $false
-$chkFormat.Add_CheckedChanged({
-        if ($chkFormat.Checked) { $chkClean.Checked = $false; $chkClean.Enabled = $false }
-        else { $chkClean.Enabled = $true }
+# Destination TextBox
+$txtDest = New-Object System.Windows.Forms.TextBox
+$txtDest.Location = New-Object System.Drawing.Point(85, 137)
+$txtDest.Size = New-Object System.Drawing.Size(305, 20)
+$txtDest.Text = $lastDest
+$form.Controls.Add($txtDest)
+
+# Destination Browse Button
+$btnDest = New-Object System.Windows.Forms.Button
+$btnDest.Location = New-Object System.Drawing.Point(400, 135)
+$btnDest.Size = New-Object System.Drawing.Size(85, 24)
+$btnDest.Text = "Browse..."
+$btnDest.Add_Click({
+        $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+        $dialog.Description = "Select Destination Folder (Your SD Card)"
+        if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $txtDest.Text = $dialog.SelectedPath
+        }
     })
-$form.Controls.Add($chkFormat)
-
+$form.Controls.Add($btnDest)
 # Checkbox: Smart Reorganize
 $chkGroup = New-Object System.Windows.Forms.CheckBox
-$chkGroup.Location = New-Object System.Drawing.Point(85, 220)
+$chkGroup.Location = New-Object System.Drawing.Point(85, 170)
 $chkGroup.Size = New-Object System.Drawing.Size(400, 20)
 $chkGroup.Text = "Auto-Reorganize (.gb/.gbc to System Folders & Auto-Create Series Folders)"
 $chkGroup.Checked = $true
@@ -182,7 +161,7 @@ $form.Controls.Add($chkGroup)
 
 # Checkbox: Auto-Split Alphabetical
 $chkAZFolders = New-Object System.Windows.Forms.CheckBox
-$chkAZFolders.Location = New-Object System.Drawing.Point(85, 245)
+$chkAZFolders.Location = New-Object System.Drawing.Point(85, 195)
 $chkAZFolders.Size = New-Object System.Drawing.Size(400, 20)
 $chkAZFolders.Text = "Subdivide loose games into A-Z Folders (A, B, C...)"
 $chkAZFolders.Checked = $true
@@ -190,7 +169,7 @@ $form.Controls.Add($chkAZFolders)
 
 # Checkbox: 1G1R Filter
 $chk1G1R = New-Object System.Windows.Forms.CheckBox
-$chk1G1R.Location = New-Object System.Drawing.Point(85, 270)
+$chk1G1R.Location = New-Object System.Drawing.Point(85, 220)
 $chk1G1R.Size = New-Object System.Drawing.Size(400, 20)
 $chk1G1R.Text = "1G1R Filter: Keep only the best region per game"
 $chk1G1R.Checked = $false
@@ -204,7 +183,7 @@ $form.Controls.Add($chk1G1R)
 
 # Region: USA
 $chkRegionUSA = New-Object System.Windows.Forms.CheckBox
-$chkRegionUSA.Location = New-Object System.Drawing.Point(105, 290)
+$chkRegionUSA.Location = New-Object System.Drawing.Point(105, 240)
 $chkRegionUSA.Size = New-Object System.Drawing.Size(80, 20)
 $chkRegionUSA.Text = "USA (1)"
 $chkRegionUSA.Checked = $true
@@ -213,7 +192,7 @@ $form.Controls.Add($chkRegionUSA)
 
 # Region: World
 $chkRegionWorld = New-Object System.Windows.Forms.CheckBox
-$chkRegionWorld.Location = New-Object System.Drawing.Point(185, 290)
+$chkRegionWorld.Location = New-Object System.Drawing.Point(185, 240)
 $chkRegionWorld.Size = New-Object System.Drawing.Size(80, 20)
 $chkRegionWorld.Text = "World (2)"
 $chkRegionWorld.Checked = $true
@@ -222,7 +201,7 @@ $form.Controls.Add($chkRegionWorld)
 
 # Region: Europe
 $chkRegionEur = New-Object System.Windows.Forms.CheckBox
-$chkRegionEur.Location = New-Object System.Drawing.Point(265, 290)
+$chkRegionEur.Location = New-Object System.Drawing.Point(265, 240)
 $chkRegionEur.Size = New-Object System.Drawing.Size(80, 20)
 $chkRegionEur.Text = "Europe (3)"
 $chkRegionEur.Checked = $true
@@ -231,7 +210,7 @@ $form.Controls.Add($chkRegionEur)
 
 # Region: Japan
 $chkRegionJpn = New-Object System.Windows.Forms.CheckBox
-$chkRegionJpn.Location = New-Object System.Drawing.Point(345, 290)
+$chkRegionJpn.Location = New-Object System.Drawing.Point(345, 240)
 $chkRegionJpn.Size = New-Object System.Drawing.Size(80, 20)
 $chkRegionJpn.Text = "Japan (4)"
 $chkRegionJpn.Checked = $true
@@ -240,7 +219,7 @@ $form.Controls.Add($chkRegionJpn)
 
 # Checkbox: Zip Support
 $chkZip = New-Object System.Windows.Forms.CheckBox
-$chkZip.Location = New-Object System.Drawing.Point(85, 320)
+$chkZip.Location = New-Object System.Drawing.Point(85, 270)
 $chkZip.Size = New-Object System.Drawing.Size(400, 20)
 $chkZip.Text = "Extract ROMs from .zip files"
 $chkZip.Checked = $false
@@ -248,7 +227,7 @@ $form.Controls.Add($chkZip)
 
 # Checkbox: Keep Tags
 $chkKeepTags = New-Object System.Windows.Forms.CheckBox
-$chkKeepTags.Location = New-Object System.Drawing.Point(85, 345)
+$chkKeepTags.Location = New-Object System.Drawing.Point(85, 295)
 $chkKeepTags.Size = New-Object System.Drawing.Size(400, 20)
 $chkKeepTags.Text = "Keep Original Tags (Prevents overwriting multiple versions)"
 $chkKeepTags.Checked = $true
@@ -256,7 +235,7 @@ $form.Controls.Add($chkKeepTags)
 
 # Checkbox: Backup Saves
 $chkBackupSaves = New-Object System.Windows.Forms.CheckBox
-$chkBackupSaves.Location = New-Object System.Drawing.Point(85, 370)
+$chkBackupSaves.Location = New-Object System.Drawing.Point(85, 320)
 $chkBackupSaves.Size = New-Object System.Drawing.Size(400, 20)
 $chkBackupSaves.Text = "Backup SD .sav/.rtc files to PC before cleaning"
 $chkBackupSaves.Checked = $true
@@ -264,8 +243,8 @@ $form.Controls.Add($chkBackupSaves)
 
 # Log Box
 $txtLog = New-Object System.Windows.Forms.TextBox
-$txtLog.Location = New-Object System.Drawing.Point(15, 400)
-$txtLog.Size = New-Object System.Drawing.Size(500, 200)
+$txtLog.Location = New-Object System.Drawing.Point(15, 345)
+$txtLog.Size = New-Object System.Drawing.Size(500, 255)
 $txtLog.Multiline = $true
 $txtLog.ScrollBars = "Vertical"
 $txtLog.ReadOnly = $true
@@ -737,11 +716,7 @@ $btnStart.Add_Click({
             if ($res -ne [System.Windows.Forms.DialogResult]::OK) { return }
         }
 
-        if ($chkFormat.Checked -and $destFull.TrimEnd('\/') -ne $destRoot.TrimEnd('\/')) {
-            $warnMsg = "WARNING: 'Force Full Copy' is enabled, which will WIPE the destination folder.`n`nYou selected a subfolder instead of the SD card root:`n$destFull`n`nAre you sure you want to wipe this entire folder?"
-            $res = [System.Windows.Forms.MessageBox]::Show($warnMsg, "Confirm Destructive Format", 1, [System.Windows.Forms.MessageBoxIcon]::Warning)
-            if ($res -ne [System.Windows.Forms.DialogResult]::OK) { return }
-        }
+
 
         # Determine standard OS folder for EverDrive saves (EDGB, GBOS, or GBCSYS)
         $osFolder = [string]"EDGB"
@@ -771,8 +746,6 @@ $btnStart.Add_Click({
         $btnHacks.Enabled = $false
         $btnGbcSysPayload.Enabled = $false
         $btnDest.Enabled = $false
-        $chkClean.Enabled = $false
-        $chkFormat.Enabled = $false
         $chkGroup.Enabled = $false
         $chk1G1R.Enabled = $false
         $chkZip.Enabled = $false
@@ -814,36 +787,18 @@ $btnStart.Add_Click({
                 Write-UiMsg "Backed up $saveCount save/rtc files."
             }
 
-            if ($chkFormat.Checked) {
-                Write-UiMsg "Formatting destination directory (Preserving EverDrive OS folders)..."
-                if (Test-Path -LiteralPath $dest) {
-                    $itemsToClean = Get-ChildItem -LiteralPath $dest | Where-Object { 
-                        $_.Name -notmatch '(?i)^(EDGB|GBOS|GBCSYS|System Volume Information)$' 
-                    }
-                    foreach ($i in $itemsToClean) {
-                        Remove-Item -LiteralPath $i.FullName -Recurse -Force -ErrorAction SilentlyContinue
-                    }
-                    Write-UiMsg "Destination formatted."
+            Write-UiMsg "Formatting destination directory (Preserving EverDrive OS folders)..."
+            if (Test-Path -LiteralPath $dest) {
+                $itemsToClean = Get-ChildItem -LiteralPath $dest | Where-Object { 
+                    $_.Name -notmatch '(?i)^(EDGB|GBOS|GBCSYS|System Volume Information)$' 
                 }
+                foreach ($i in $itemsToClean) {
+                    Remove-Item -LiteralPath $i.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                Write-UiMsg "Destination formatted."
             }
 
             $sdCatalog = @{}
-            if ($chkClean.Checked) {
-                Write-UiMsg "Cataloging existing SD Card files for Differential Sync..."
-                if (Test-Path -LiteralPath $dest) {
-                    $itemsOnSd = Get-ChildItem -LiteralPath $dest -File -Recurse | Where-Object { 
-                        $_.FullName -notmatch '(?i)[\\/](EDGB|GBOS|GBCSYS|System Volume Information)[\\/]' 
-                    }
-                    foreach ($i in $itemsOnSd) {
-                        $sig = "$($i.Length)_$($i.LastWriteTime.Ticks)_$($i.Name)"
-                        if (-not $sdCatalog.ContainsKey($sig)) {
-                            $sdCatalog[$sig] = New-Object System.Collections.Generic.List[System.IO.FileInfo]
-                        }
-                        $sdCatalog[$sig].Add($i)
-                    }
-                    Write-UiMsg "Cataloged $($itemsOnSd.Count) files."
-                }
-            }
 
             Write-UiMsg "Analyzing files..."
             
@@ -894,8 +849,6 @@ $btnStart.Add_Click({
             if ($allFiles.Count -eq 0 -and -not $hacksSource) {
                 throw "No files found to sync! Please check your source path."
             }
-
-            $progressBar.Maximum = $allFiles.Count
 
             if ($chkGroup.Checked) {
                 Write-UiMsg "Analyzing files for Series grouping... (This can take 20-40 seconds for massive libraries)"
@@ -1072,6 +1025,25 @@ $btnStart.Add_Click({
 
                 Write-UiMsg "Virtual hierarchy built. Starting sequential sync..."
                 
+                $script:vTreeCount = 0
+                $countAction = {
+                    param($Node)
+                    foreach ($c in $Node.Children) {
+                        if ($c.IsFolder) { & $countAction $c } else { $script:vTreeCount++ }
+                    }
+                }
+                & $countAction $vRoot
+                $totalSyncNodes = $script:vTreeCount
+                
+                $nonSaves = @()
+                if (-not [string]::IsNullOrWhiteSpace($gbcSysPayload) -and (Test-Path -LiteralPath $gbcSysPayload)) {
+                    $nonSaves = @(Get-ChildItem -LiteralPath $gbcSysPayload -File -Recurse | Where-Object { $_.Extension -notmatch '(?i)^\.(sav|rtc|srm|fla)$' -or $_.DirectoryName -match '(?i)[\\/]SNAP$' })
+                    $totalSyncNodes += $nonSaves.Count
+                }
+                
+                $progressBar.Maximum = if ($totalSyncNodes -gt 0) { $totalSyncNodes } else { 1 }
+                $progressBar.Value = 0
+
                 # --- RENAME EXISTING SD SAVES TO MATCH ROM NAMES ---
                 $sysPaths = @((Join-Path (Join-Path $dest $osFolder) $saveSubDirBase), (Join-Path (Join-Path $dest $osFolder) $rtcSubDirBase))
                 foreach ($sp in $sysPaths) {
@@ -1127,7 +1099,6 @@ $btnStart.Add_Click({
                 # Directly copy non-save files from the GBCSYS Payload directly to the target OS Folder
                 if (-not [string]::IsNullOrWhiteSpace($gbcSysPayload) -and (Test-Path -LiteralPath $gbcSysPayload)) {
                     Write-UiMsg "Copying non-save system files from GBCSYS Payload directly..."
-                    $nonSaves = Get-ChildItem -LiteralPath $gbcSysPayload -File -Recurse | Where-Object { $_.Extension -notmatch '(?i)^\.(sav|rtc|srm|fla)$' -or $_.DirectoryName -match '(?i)[\\/]SNAP$' }
                     foreach ($ns in $nonSaves) {
                         # Resolve relative path inside payload folder so subdirectories stay intact
                         $rel = $ns.FullName.Substring($gbcSysPayload.Length).TrimStart('\', '/')
@@ -1137,34 +1108,21 @@ $btnStart.Add_Click({
                             New-Item -ItemType Directory -Path (Split-Path $targetSysPath) | Out-Null
                         }
                         Copy-Item -LiteralPath $ns.FullName -Destination $targetSysPath -Force
+                        Update-UiProgress
                     }
                 }
 
-                if ($chkClean.Checked) {
-                    Write-UiMsg "Cleaning up orphaned files on SD Card..."
-                    $orphanCount = 0
-                    foreach ($orphanedList in $sdCatalog.Values) {
-                        foreach ($orphan in $orphanedList) {
-                            if (Test-Path -LiteralPath $orphan.FullName) {
-                                Remove-Item -LiteralPath $orphan.FullName -Force -ErrorAction SilentlyContinue
-                                $orphanCount++
-                            }
-                        }
-                    }
-                    Write-UiMsg "Cleaned $orphanCount orphaned files."
-                    Write-UiMsg "Cleaning empty directories..."
-                    $dirs = Get-ChildItem -LiteralPath $dest -Directory -Recurse | Where-Object { 
-                        $_.FullName -notmatch '(?i)[\\/](EDGB|GBOS|GBCSYS|System Volume Information)([\\/]?|$)' 
-                    } | Sort-Object -Property @{Expression = { $_.FullName.Length }; Descending = $true }
-                    foreach ($d in $dirs) {
-                        if ((Get-ChildItem -LiteralPath $d.FullName -Force).Count -eq 0) {
-                            Remove-Item -LiteralPath $d.FullName -Force -ErrorAction SilentlyContinue
-                        }
-                    }
-                }
             }
             else {
                 # Standard bypass - Sync Source directly
+                $bpFileCount = 0
+                if ($sourceValid) { $bpFileCount += @(Get-ChildItem -LiteralPath $source -File -Recurse).Count }
+                if (-not [string]::IsNullOrWhiteSpace($hacksSource) -and (Test-Path -LiteralPath $hacksSource)) { $bpFileCount += @(Get-ChildItem -LiteralPath $hacksSource -File -Recurse).Count }
+                if (-not [string]::IsNullOrWhiteSpace($gbcSysPayload) -and (Test-Path -LiteralPath $gbcSysPayload)) { $bpFileCount += @(Get-ChildItem -LiteralPath $gbcSysPayload -File -Recurse).Count }
+                
+                $progressBar.Maximum = if ($bpFileCount -gt 0) { $bpFileCount } else { 1 }
+                $progressBar.Value = 0
+
                 if ($sourceValid) {
                     Write-UiMsg "Syncing main library directly..."
                     Copy-ItemsSorted -SrcPath $source -DestPath $dest
@@ -1284,8 +1242,7 @@ $btnStart.Add_Click({
             $btnHacks.Enabled = $true
             $btnGbcSysPayload.Enabled = $true
             $btnDest.Enabled = $true
-            if ($chkFormat.Checked) { $chkClean.Enabled = $false } else { $chkClean.Enabled = $true }
-            $chkFormat.Enabled = $true
+
             $chkGroup.Enabled = $true
             $chk1G1R.Enabled = $true
             $chkZip.Enabled = $true
