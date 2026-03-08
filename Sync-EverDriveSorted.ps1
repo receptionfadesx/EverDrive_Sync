@@ -715,7 +715,17 @@ $btnStart.Add_Click({
             $res = [System.Windows.Forms.MessageBox]::Show($warnMsg, "DANGER: System Drive Selected", 1, [System.Windows.Forms.MessageBoxIcon]::Warning)
             if ($res -ne [System.Windows.Forms.DialogResult]::OK) { return }
         }
-        else {
+
+        # Check for EverDrive OS folders to prevent wiping regular external/backup drives
+        $hasEverDriveOS = (Test-Path -LiteralPath (Join-Path $dest "EDGB")) -or 
+        (Test-Path -LiteralPath (Join-Path $dest "GBOS")) -or 
+        (Test-Path -LiteralPath (Join-Path $dest "GBCSYS"))
+        
+        if (-not $hasEverDriveOS) {
+            [System.Windows.Forms.MessageBox]::Show("CRITICAL ERROR: The selected destination ($destFull) does not appear to be an EverDrive SD card because it is missing the standard system folder (EDGB, GBOS, or GBCSYS).`n`nTo protect against accidental data loss on external and backup drives, the sync has been blocked.`n`nIf this is a new SD card, please copy your EverDrive OS files to the SD card first before syncing.", "Invalid Destination", 0, [System.Windows.Forms.MessageBoxIcon]::Error)
+            return
+        }
+        elseif ($destRoot -ne $sysDrive) {
             $warnMsg2 = "WARNING: This will permanently DELETE all non-system files on drive [$destRoot] (in $destFull).`n`nAre you absolutely sure you want to proceed?"
             $res2 = [System.Windows.Forms.MessageBox]::Show($warnMsg2, "Confirm Deletion", 1, [System.Windows.Forms.MessageBoxIcon]::Warning)
             if ($res2 -ne [System.Windows.Forms.DialogResult]::OK) { return }
