@@ -118,7 +118,7 @@ def get_series_groups(files):
         "Kirby", "Tetris", "Metroid", "Street Fighter", "Mortal Kombat",
         "Tomb Raider", "Resident Evil", "Tony Hawk", "Pac-Man", "Crash Bandicoot",
         "Rayman", "Harvest Moon", "Star Wars", "Disney", "Batman", "Spider-Man",
-        "Yu-Gi-Oh", "Harry Potter", "Ninja Turtles"]
+        "X-Men", "Yu-Gi-Oh", "Harry Potter", "Ninja Turtles"]
         
     assigned = set()
     for f in files:
