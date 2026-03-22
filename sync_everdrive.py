@@ -458,7 +458,12 @@ class SyncApp(ctk.CTk):
                 # Path traversal guard
                 dest_real = os.path.realpath(current_dest)
                 target_real = os.path.realpath(target_path)
-                if not target_real.startswith(dest_real + os.sep) and target_real != dest_real:
+                try:
+                    is_safe = os.path.commonpath([dest_real, target_real]) == dest_real
+                except ValueError:
+                    is_safe = False
+                    
+                if not is_safe:
                     raise ValueError(f"Path traversal detected: {target_path}")
 
                 if not os.path.exists(target_path):
@@ -473,7 +478,12 @@ class SyncApp(ctk.CTk):
                 # Path traversal guard for file
                 dest_real = os.path.realpath(current_dest)
                 target_real = os.path.realpath(target_path)
-                if not target_real.startswith(dest_real + os.sep):
+                try:
+                    is_safe = os.path.commonpath([dest_real, target_real]) == dest_real
+                except ValueError:
+                    is_safe = False
+                    
+                if not is_safe:
                     raise ValueError(f"Path traversal detected: {target_path}")
 
                 if os.path.exists(target_path):
