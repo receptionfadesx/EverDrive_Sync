@@ -86,7 +86,19 @@ If you accidentally wipe your EverDrive or want to restore states from a previou
 ## Legal & Trademarks
 
 - **EverDrive** and **Krikzz** are trademarks of **Krikzz (EverDrive.me)**. 
-- **Nintendo**, **Game Boy**, and **Game Boy Color** are trademarks of **Nintendo of America Inc.**
-- All other game titles, series names (e.g., *Pokemon*, *The Legend of Zelda*), and characters mentioned in this project are the property of their respective trademark and copyright holders.
+- **Nintendo**, **Game Boy**, **Game Boy Color**, and related console names are trademarks of **Nintendo of America Inc.**
+- **Pokémon** and related characters are trademarks of **Nintendo**, **Creatures Inc.**, and **Game Freak**.
+- **Konami**, **Contra**, **Castlevania**, and **Metal Gear** are trademarks of **Konami Digital Entertainment**.
+- **Capcom**, **Mega Man**, **Resident Evil**, **Street Fighter**, and **Ghosts 'n Goblins** are trademarks of **Capcom Co., Ltd.**
+- **Square Enix**, **Final Fantasy**, and **Dragon Quest** are trademarks of **Square Enix Holdings Co., Ltd.**
+- **Sega** and **Sonic the Hedgehog** are trademarks of **Sega Corporation**.
+- **Bandai Namco**, **Digimon**, and **Pac-Man** are trademarks of **Bandai Namco Entertainment**.
+- **Disney** is a trademark of **Disney Enterprises, Inc.**
+- **Marvel**, **X-Men**, and **Spider-Man** are trademarks of **Marvel Characters, Inc.**
+- **DC Comics** and **Batman** are trademarks of **DC Comics**.
+- **Warner Bros** and **Harry Potter** are trademarks of **Warner Bros. Ent.**
+- **Shantae** is a trademark of **WayForward Technologies, Inc.**
+- **Metal Slug** is a trademark of **SNK Corporation**.
+- All other game titles, series names, and characters mentioned in this project are the property of their respective trademark and copyright holders.
 
 This project is an **unofficial community tool** and is not affiliated with, endorsed by, or supported by any of the aforementioned companies. It is intended for use with legally obtained backups of software the user owns. The developers of this tool do not condone or encourage software piracy.
