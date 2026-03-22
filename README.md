@@ -4,7 +4,7 @@
 
 **⚠️ WARNING: USE AT YOUR OWN RISK. It is highly recommended to test this tool using a secondary or backup SD card first before modifying your primary library.**
 
-A comprehensive, power-user GUI utility built in PowerShell for managing, organizing, and syncing legally backed-up Game Boy and Game Boy Color ROMs to EverDrive-GB X7 (and similar) flash cartridges. 
+A comprehensive, power-user cross-platform GUI utility built in Python for managing, organizing, and syncing legally backed-up Game Boy and Game Boy Color ROMs to EverDrive-GB X7 (and similar) flash cartridges. 
 
 ![EverDrive Sync Tool GUI](assets/Screenshot.png)
 
@@ -12,7 +12,7 @@ EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alpha
 
 ## Features
 
-- **Intuitive GUI**: Easy-to-use graphical interface built directly in PowerShell via `System.Windows.Forms`. Configures your source, destination, and sync options without needing to touch the command line.
+- **Intuitive GUI**: Easy-to-use graphical interface built directly in Python via `customtkinter`. Configures your source, destination, and sync options without needing to touch the command line.
 - **Hardware-Compliant Copying**: Copies files strictly in alphabetical order to ensure menus sort correctly on the EverDrive hardware (which relies on FAT32 write-order).
 - **Smart Sync**: Intelligently updates your SD card by moving existing ROMs/saves locally and only copying new files, drastically speeding up the sync process compared to a full wipe and copy. 
 - **Force Full Copy**: Wipes the SD card and rewrites everything cleanly to fix stubborn alphabetical sorting issues on the flash cart. Protects crucial system folders (e.g., `GBCSYS`, `EDGB`) from being deleted.
@@ -39,20 +39,30 @@ EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alpha
 
 ## Requirements
 
-- **OS**: Windows 10 / Windows 11
-- **PowerShell**: Version 5.1 or higher
+- **OS**: Windows, macOS, or Linux
 - **Hardware**: Krikzz EverDrive-GB X7 (or compatible flash cartridge)
 
-## Quick Start
+## Quick Start (Standalone Executables)
 
-1. Right-click `Sync-EverDriveSorted.ps1` and select **Run with PowerShell**.
-   *(If prompted by execution policies, you may need to run `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass` in your PowerShell console first).*
-2. **Choose Source**: Select the folder containing your legally backed-up Game Boy and Game Boy Color ROMs.
-3. **Choose SD Card**: Select the root drive letter of your EverDrive SD card.
-4. **Select Options**: Check the boxes matching your desired library configuration (e.g., 1G1R filtering, auto-sorting).
-5. **Start Sync**: Click the green "Start Sync" button and let the script handle the heavy lifting!
+The easiest way to use this tool is to build and run the standalone executable, which requires no installation or setup after it's built:
+1. Run the respective build script for your OS (`build_windows.bat`, `build_macos.sh`, or `build_linux.sh`). This requires Python to be installed.
+2. The standalone executable will be generated in the `dist/` directory. Simply double-click it to launch the GUI!
+3. **Choose Source**: Select the folder containing your Game Boy and Game Boy Color ROMs.
+4. **Choose SD Card**: Select the directory of your EverDrive SD card.
+5. **Select Options**: Check the boxes matching your desired library configuration (e.g., 1G1R filtering, auto-sorting).
+6. **Start Sync**: Click the green "Start Sync" button and let the script handle the heavy lifting!
 
 > **Note:** The script will automatically save your selected paths and options to `~/.everdrive_sync_config.json` for your next session.
+
+## Quick Start (Python Source)
+
+Alternatively, if you prefer to run the script via Python directly:
+1. Ensure you have Python installed.
+2. Install the required packages: `pip install -r requirements.txt`
+3. Run the script: `python sync_everdrive.py`
+
+## Legacy PowerShell version
+The original PowerShell `.ps1` script is still available in the `legacy_cli/` directory for Windows power users who prefer it.
 
 ## Save Restorations
 
