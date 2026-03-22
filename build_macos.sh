@@ -5,6 +5,6 @@ pip3 install -r requirements.txt
 pip3 install pyinstaller
 
 echo "Running PyInstaller..."
-pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter sync_everdrive.py
+pyinstaller --noconfirm --onefile --windowed --add-data "assets:assets" --icon assets/icon.png --collect-all customtkinter sync_everdrive.py
 
 echo "Build complete! Your .app is located in the 'dist' folder."

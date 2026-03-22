@@ -10,6 +10,7 @@ import threading
 import unicodedata
 import tkinter as tk
 import itertools
+import sys
 from tkinter import filedialog, messagebox
 import subprocess
 
@@ -216,7 +217,24 @@ class SyncApp(ctk.CTk):
             "Source": "", "Hacks": "", "GbcSysPayload": "", "Dest": ""
         }
         self.load_config()
+        self.set_app_icon()
         self.create_widgets()
+
+    def get_asset_path(self, relative_path):
+        try:
+            base_path = sys._MEIPASS
+        except Exception:
+            base_path = os.path.abspath(".")
+        return os.path.join(base_path, relative_path)
+
+    def set_app_icon(self):
+        icon_path = self.get_asset_path(os.path.join("assets", "icon.png"))
+        if os.path.exists(icon_path):
+            try:
+                img = tk.PhotoImage(file=icon_path)
+                self.iconphoto(True, img)
+            except Exception:
+                pass
         
     def load_config(self):
         if os.path.exists(CONFIG_FILE):

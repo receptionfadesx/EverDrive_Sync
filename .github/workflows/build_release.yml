@@ -45,7 +45,12 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter sync_everdrive.py
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            pyinstaller --noconfirm --onefile --windowed --add-data "assets;assets" --icon assets/icon.png --collect-all customtkinter sync_everdrive.py
+          else
+            pyinstaller --noconfirm --onefile --windowed --add-data "assets:assets" --icon assets/icon.png --collect-all customtkinter sync_everdrive.py
+          fi
+        shell: bash
 
       - name: Zip artifact (Windows/Linux)
         if: matrix.os != 'macos-latest'
