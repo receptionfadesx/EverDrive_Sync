@@ -228,11 +228,17 @@ class SyncApp(ctk.CTk):
         return os.path.join(base_path, relative_path)
 
     def set_app_icon(self):
-        icon_path = self.get_asset_path(os.path.join("assets", "icon.png"))
+        # Use .ico for Windows title bar, .png for others
+        ext = ".ico" if platform.system() == "Windows" else ".png"
+        icon_path = self.get_asset_path(os.path.join("assets", f"icon{ext}"))
+        
         if os.path.exists(icon_path):
             try:
-                img = tk.PhotoImage(file=icon_path)
-                self.iconphoto(True, img)
+                if platform.system() == "Windows":
+                    self.iconbitmap(icon_path)
+                else:
+                    img = tk.PhotoImage(file=icon_path)
+                    self.iconphoto(True, img)
             except Exception:
                 pass
         
