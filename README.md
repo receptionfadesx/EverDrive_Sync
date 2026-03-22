@@ -1,5 +1,9 @@
 # Sync Tool for EverDrive GB X7
 
+<p align="center">
+  <img src="assets/icon - Copy.png" width="200" alt="EverDrive Sync Logo">
+</p>
+
 *Disclaimer: This is an unofficial community tool and is not associated with, endorsed by, or affiliated with Krikzz or the official EverDrive brand in any way.*
 
 **⚠️ WARNING: USE AT YOUR OWN RISK. It is highly recommended to test this tool using a secondary or backup SD card first before modifying your primary library.**
