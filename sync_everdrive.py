@@ -20,6 +20,7 @@ except ImportError:
     print("Error: customtkinter is not installed. Please run `pip install customtkinter`")
     exit(1)
 
+# This ensures the UI scales correctly on high-DPI Windows displays
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
