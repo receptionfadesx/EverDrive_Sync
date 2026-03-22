@@ -79,3 +79,10 @@ The original PowerShell `.ps1` script is still available in the `legacy_cli/` di
 ## Save Restorations
 
 If you accidentally wipe your EverDrive or want to restore states from a previous sync, the script maintains your files in a local `Saves_Backup` directory in your Source ROM folder. Check the **Restore saves from PC (Saves_Backup) to SD card** checkbox on the GUI to safely push these back to the required system folders when you perform a sync.
+## Legal & Trademarks
+
+- **EverDrive** and **Krikzz** are trademarks of **Krikzz (EverDrive.me)**. 
+- **Nintendo**, **Game Boy**, and **Game Boy Color** are trademarks of **Nintendo of America Inc.**
+- All other game titles, series names (e.g., *Pokemon*, *The Legend of Zelda*), and characters mentioned in this project are the property of their respective trademark and copyright holders.
+
+This project is an **unofficial community tool** and is not affiliated with, endorsed by, or supported by any of the aforementioned companies. It is intended for use with legally obtained backups of software the user owns. The developers of this tool do not condone or encourage software piracy.
