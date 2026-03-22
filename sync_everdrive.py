@@ -339,25 +339,32 @@ class SyncApp(ctk.CTk):
         self.chk_jpn.pack(side="left", padx=5)
 
         self.chk_zip_var = tk.BooleanVar(value=False)
-        ctk.CTkCheckBox(opt_frame, text="Extract zip files", variable=self.chk_zip_var).pack(anchor="w", padx=10, pady=5)
+        self.chk_zip = ctk.CTkCheckBox(opt_frame, text="Extract zip files", variable=self.chk_zip_var)
+        self.chk_zip.pack(anchor="w", padx=10, pady=5)
 
         self.chk_tags_var = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(opt_frame, text="Keep Tags", variable=self.chk_tags_var).pack(anchor="w", padx=10, pady=2)
+        self.chk_tags = ctk.CTkCheckBox(opt_frame, text="Keep Tags", variable=self.chk_tags_var)
+        self.chk_tags.pack(anchor="w", padx=10, pady=2)
 
         self.chk_backups_var = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(opt_frame, text="Backup SD saves to PC", variable=self.chk_backups_var).pack(anchor="w", padx=10, pady=2)
+        self.chk_backups = ctk.CTkCheckBox(opt_frame, text="Backup SD saves to PC", variable=self.chk_backups_var)
+        self.chk_backups.pack(anchor="w", padx=10, pady=2)
 
         self.chk_restore_var = tk.BooleanVar(value=False)
-        ctk.CTkCheckBox(opt_frame, text="Restore saves from PC to SD", variable=self.chk_restore_var).pack(anchor="w", padx=10, pady=2)
+        self.chk_restore = ctk.CTkCheckBox(opt_frame, text="Restore saves from PC to SD", variable=self.chk_restore_var)
+        self.chk_restore.pack(anchor="w", padx=10, pady=2)
 
         self.chk_folders_last_var = tk.BooleanVar(value=False)
-        ctk.CTkCheckBox(opt_frame, text="Advanced: Folders AFTER games", variable=self.chk_folders_last_var).pack(anchor="w", padx=10, pady=2)
+        self.chk_folders_last = ctk.CTkCheckBox(opt_frame, text="Advanced: Folders AFTER games", variable=self.chk_folders_last_var)
+        self.chk_folders_last.pack(anchor="w", padx=10, pady=2)
 
         self.chk_recent_var = tk.BooleanVar(value=False)
-        ctk.CTkCheckBox(opt_frame, text="Advanced: Sort Hacks by Date", variable=self.chk_recent_var).pack(anchor="w", padx=10, pady=2)
+        self.chk_recent = ctk.CTkCheckBox(opt_frame, text="Advanced: Sort Hacks by Date", variable=self.chk_recent_var)
+        self.chk_recent.pack(anchor="w", padx=10, pady=2)
 
         self.chk_fav_var = tk.BooleanVar(value=False)
-        ctk.CTkCheckBox(opt_frame, text="Advanced: Push favorites to top", variable=self.chk_fav_var).pack(anchor="w", padx=10, pady=2)
+        self.chk_fav = ctk.CTkCheckBox(opt_frame, text="Advanced: Push favorites to top", variable=self.chk_fav_var)
+        self.chk_fav.pack(anchor="w", padx=10, pady=2)
 
         self.txt_log = ctk.CTkTextbox(self, height=150, font=("Consolas", 12))
         self.txt_log.pack(pady=10, padx=20, fill="x")
@@ -438,6 +445,9 @@ class SyncApp(ctk.CTk):
         self.chk_tags.configure(state=state)
         self.chk_backups.configure(state=state)
         self.chk_restore.configure(state=state)
+        self.chk_fav.configure(state=state)
+        self.chk_folders_last.configure(state=state)
+        self.chk_recent.configure(state=state)
 
     def start_sync_thread(self):
         self.save_config()
@@ -449,12 +459,14 @@ class SyncApp(ctk.CTk):
     def copy_virtual_tree(self, node, current_dest, sd_catalog, folders_last, recent_sort):
         if not node.children: return
         
+        # folder_sort_desc=True means folders should sort FIRST (lower key value)
+        # We use != so that when is_folder matches folder_sort_desc, the key is False (lower = earlier)
         folder_sort_desc = not folders_last
         
         if recent_sort and re.search(r'(?i)\[?(ROM Hacks|New Additions|Recent)\]?', node.name):
-            sorted_child = sorted(node.children, key=lambda c: (c.is_folder == folder_sort_desc, -c.last_write_time))
+            sorted_child = sorted(node.children, key=lambda c: (c.is_folder != folder_sort_desc, -c.last_write_time))
         else:
-            sorted_child = sorted(node.children, key=lambda c: (c.is_folder == folder_sort_desc, c.name.lower()))
+            sorted_child = sorted(node.children, key=lambda c: (c.is_folder != folder_sort_desc, c.name.lower()))
             
         for child in sorted_child:
             target_name = child.name
@@ -533,7 +545,14 @@ class SyncApp(ctk.CTk):
 
     def backup_saves(self, source: str, hacks: str, dest: str, os_folder: str) -> None:
         self.log_msg("Backing up .sav, .srm, and .rtc files to PC...")
-        backup_dir = os.path.join(source, "Saves_Backup") if source else os.path.join(hacks, "Saves_Backup")
+        # Choose best backup location: prefer source, fallback to hacks, skip if neither valid
+        if source and os.path.isdir(source):
+            backup_dir = os.path.join(source, "Saves_Backup")
+        elif hacks and os.path.isdir(hacks):
+            backup_dir = os.path.join(hacks, "Saves_Backup")
+        else:
+            self.log_msg("Warning: Cannot back up saves — no valid source folder found.")
+            return
         os.makedirs(backup_dir, exist_ok=True)
         
         saves_found: List[str] = []
@@ -727,6 +746,9 @@ class SyncApp(ctk.CTk):
             if self.chk_backups_var.get() and os.path.isdir(dest):
                 self.backup_saves(source, hacks, dest, os_folder)
 
+            # --- SD Cataloging MUST run before clean_sd so we capture existing files for moves --- #
+            sd_catalog = self.catalog_sd(dest)
+
             # --- SD Cleaning (Soft Format) --- #
             if self.chk_reorganize_var.get():
                 self.clean_sd(dest, os_folder)
@@ -760,9 +782,6 @@ class SyncApp(ctk.CTk):
                                     favs.add(get_fuzzy_title(line))
                     except Exception as e:
                         self.log_msg(f"Failed to load favorites: {e}")
-
-            # --- SD Cataloging --- #
-            sd_catalog = self.catalog_sd(dest)
 
             # GAP 5: Exclude OS subfolders (EDGB, GBOS, GBCSYS) + Saves_Backup from source scan
             _os_excl = {"saves_backup", "gbcsys", "gbos", "edgb"}
