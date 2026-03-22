@@ -1,4 +1,4 @@
-﻿import os
+import os
 import json
 import shutil
 import re
@@ -11,6 +11,7 @@ import unicodedata
 import tkinter as tk
 import itertools
 from tkinter import filedialog, messagebox
+import subprocess
 
 try:
     import customtkinter as ctk # type: ignore
@@ -224,7 +225,8 @@ class SyncApp(ctk.CTk):
                     data = json.load(f)
                 for k in self.config_data:
                     if k in data: self.config_data[k] = data[k]
-            except Exception: pass
+            except (json.JSONDecodeError, OSError):
+                pass 
 
     def save_config(self):
         self.config_data["Source"] = self.txt_source.get()
@@ -233,7 +235,8 @@ class SyncApp(ctk.CTk):
         self.config_data["Dest"] = self.txt_dest.get()
         try:
             with open(CONFIG_FILE, "w") as f: json.dump(self.config_data, f)
-        except: pass
+        except OSError:
+            pass
 
     def create_widgets(self):
         path_frame = ctk.CTkFrame(self)
@@ -358,18 +361,25 @@ class SyncApp(ctk.CTk):
             entry_widget.insert(0, folder)
 
     def log_msg(self, msg):
+        print(msg)
+        self.after(0, self._log_msg_ui, msg)
+
+    def _log_msg_ui(self, msg):
         self.txt_log.configure(state="normal")
         self.txt_log.insert("end", msg + "\n")
         self.txt_log.see("end")
         self.txt_log.configure(state="disabled")
-        print(msg)
         self.update_idletasks()
 
     def set_progress(self, value, maximum=100):
-        if maximum > 0: self.progress_bar.set(value / maximum)
-        self.update_idletasks()
+        if maximum > 0:
+            self.after(0, lambda: self.progress_bar.set(value / maximum))
+        self.after(0, self.update_idletasks)
         
     def step_progress(self):
+        self.after(0, self._step_progress_ui)
+
+    def _step_progress_ui(self):
         val = self.progress_bar.get() + (1/max(1, self.prog_max))
         self.progress_bar.set(min(1.0, val))
         self.update_idletasks()
@@ -421,6 +431,12 @@ class SyncApp(ctk.CTk):
             target_path = os.path.join(current_dest, target_name)
             
             if child.is_folder:
+                # Path traversal guard
+                dest_real = os.path.realpath(current_dest)
+                target_real = os.path.realpath(target_path)
+                if not target_real.startswith(dest_real + os.sep) and target_real != dest_real:
+                    raise ValueError(f"Path traversal detected: {target_path}")
+
                 if not os.path.exists(target_path):
                     os.makedirs(target_path, exist_ok=True)
                     self.log_msg(f"Created Folder: {target_name}")
@@ -430,6 +446,12 @@ class SyncApp(ctk.CTk):
                     self.step_progress()
                     continue
                     
+                # Path traversal guard for file
+                dest_real = os.path.realpath(current_dest)
+                target_real = os.path.realpath(target_path)
+                if not target_real.startswith(dest_real + os.sep):
+                    raise ValueError(f"Path traversal detected: {target_path}")
+
                 if os.path.exists(target_path):
                     dst_stat = os.stat(target_path)
                     src_stat = os.stat(child.source_path)
@@ -441,6 +463,13 @@ class SyncApp(ctk.CTk):
                 self.log_msg(f" -> Copying: {child.name}")
                 shutil.copy2(child.source_path, target_path)
                 self.step_progress()
+
+    def mac_cleanup(self, path):
+        if platform.system() == "Darwin":
+            try:
+                subprocess.run(["dot_clean", "-m", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except (FileNotFoundError, OSError):
+                pass
 
     def run_sync(self):
         source = self.txt_source.get().strip()
@@ -462,6 +491,13 @@ class SyncApp(ctk.CTk):
         if platform.system() == "Windows" and os.path.splitdrive(dest)[0] == sys_drive:
             if not messagebox.askokcancel("WARNING", f"Dest is System Drive ({sys_drive}). Proceed?"):
                 return
+        
+        if platform.system() != "Windows":
+            real_dest = os.path.realpath(dest)
+            dangerous = ["/", str(Path.home())]
+            if real_dest in dangerous:
+                if not messagebox.askokcancel("WARNING", f"Dest '{dest}' looks like a system path. Proceed?"):
+                    return
                 
         has_os = any(os.path.exists(os.path.join(dest, d)) for d in ["EDGB", "GBOS", "GBCSYS"])
         if not has_os:
@@ -480,8 +516,6 @@ class SyncApp(ctk.CTk):
             self.log_msg("Starting Python Sync...")
             self.prog_max = 1
             self.progress_bar.set(0)
-            
-            mac_cleanup = lambda path: os.system(f"dot_clean -m '{path}' >/dev/null 2>&1") if platform.system() == "Darwin" else None
             
             # --- Quick Sync Logic --- #
             all_files = []
@@ -536,7 +570,7 @@ class SyncApp(ctk.CTk):
                 self.log_msg("Virtual tree built. Sequential sync starting...")
                 self.copy_virtual_tree(vRoot, dest, {}, self.chk_folders_last_var.get(), self.chk_recent_var.get())
 
-            mac_cleanup(dest)
+            self.mac_cleanup(dest)
             self.log_msg("Sync Complete!")
             self.after(0, lambda: messagebox.showinfo("Success", "Sync complete! Safely eject your SD card."))
 
