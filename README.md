@@ -40,6 +40,14 @@ EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alpha
   - Automatically backs up `.sav`, `.srm`, `.rtc`, `.fla`, and `.snap` files from your SD card to your PC before making drastic changes. Perfectly preserves original extensions.
   - Restores saves perfectly, matching them to dynamically renamed ROMs.
   - Routes save files into the correct flat hardware directory (e.g., `GBCSYS/SAVE` or `EDGB/SAVE`).
+  - **Auto-renames existing saves on the SD card** to guarantee they match new ROM naming conventions.
+
+### 🌟 1:1 PowerShell Legacy Parity
+The Python logic engine has undergone a massive audit and is now **100% feature complete and 1:1 with the original advanced PowerShell script**. This includes edge cases like:
+- Translating the `Hacks` folder cleanly into `[ROM Hacks]` with `1G1R`, Series sorting, and A-Z subdividing applied.
+- Automatically routing extracted `.sav` / `.rtc` files from source and placing them directly into your EverDrive's OS save folders during sync.
+- A fully robust **bypass mode** when *Auto-Reorganize* is unchecked.
+- Passing through non-ROM files (readmes, images etc) gracefully from source to SD.
 
 ## Requirements
 
