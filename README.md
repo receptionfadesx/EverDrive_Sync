@@ -42,15 +42,27 @@ EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alpha
 - **OS**: Windows, macOS, or Linux
 - **Hardware**: Krikzz EverDrive-GB X7 (or compatible flash cartridge)
 
-## Quick Start (Standalone Executables)
+## Download (Recommended)
 
-The easiest way to use this tool is to build and run the standalone executable, which requires no installation or setup after it's built:
-1. Run the respective build script for your OS (`build_windows.bat`, `build_macos.sh`, or `build_linux.sh`). This requires Python to be installed.
-2. The standalone executable will be generated in the `dist/` directory. Simply double-click it to launch the GUI!
-3. **Choose Source**: Select the folder containing your Game Boy and Game Boy Color ROMs.
-4. **Choose SD Card**: Select the directory of your EverDrive SD card.
-5. **Select Options**: Check the boxes matching your desired library configuration (e.g., 1G1R filtering, auto-sorting).
-6. **Start Sync**: Click the green "Start Sync" button and let the script handle the heavy lifting!
+Pre-built executables for **Windows, macOS, and Linux** are available on the [**GitHub Releases page**](https://github.com/receptionfadesx/EverDrive_Sync/releases/latest).
+
+1. Download the `.zip` for your OS from the latest release.
+2. Extract and double-click the executable to launch the GUI — no Python or installation required!
+
+> **macOS note:** On first launch, right-click the app → **Open** to bypass the Gatekeeper security warning (the app is unsigned).
+
+## Quick Start (Build From Source)
+
+If you prefer to build the executable yourself:
+1. Ensure Python is installed.
+2. Run the build script for your OS (`build_windows.bat`, `build_macos.sh`, or `build_linux.sh`).
+3. The standalone executable will be generated in the `dist/` directory.
+
+Then:
+1. **Choose Source**: Select the folder containing your Game Boy and Game Boy Color ROMs.
+2. **Choose SD Card**: Select the directory of your EverDrive SD card.
+3. **Select Options**: Check the boxes matching your desired library configuration (e.g., 1G1R filtering, auto-sorting).
+4. **Start Sync**: Click the green "Start Sync" button and let the script handle the heavy lifting!
 
 > **Note:** The script will automatically save your selected paths and options to `~/.everdrive_sync_config.json` for your next session.
 
