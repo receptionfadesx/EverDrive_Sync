@@ -224,10 +224,8 @@ class SyncApp(ctk.CTk):
         self.create_widgets()
 
     def get_asset_path(self, relative_path):
-        try:
-            base_path = sys._MEIPASS
-        except Exception:
-            base_path = os.path.abspath(".")
+        # getattr is used to satisfy static analysis as _MEIPASS is injected at runtime by PyInstaller
+        base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
         return os.path.join(base_path, relative_path)
 
     def set_app_icon(self):
