@@ -1,7 +1,7 @@
 # Sync Tool for EverDrive GB X7
 
 <p align="center">
-  <img src="assets/app_logo.png" width="200" alt="EverDrive Sync Logo">
+  <img src="assets/app_logo.png" width="600" alt="EverDrive Sync Logo">
 </p>
 
 *Disclaimer: This is an unofficial community tool and is not associated with, endorsed by, or affiliated with Krikzz or the official EverDrive brand in any way.*
