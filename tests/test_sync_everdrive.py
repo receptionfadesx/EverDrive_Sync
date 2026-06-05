@@ -240,3 +240,62 @@ def test_gba_pro_sync_reorganize(tmp_path):
     SyncApp.rename_sd_saves(app, str(dest), "edgba", "SAVE", "SAVE", rom_name_map)
     assert (dest / "edgba" / "gamedata" / "Metroid Fusion.gba").exists()
     assert (dest / "edgba" / "gamedata" / "Metroid Fusion.gba" / "Metroid Fusion.sav").exists()
+
+def test_standard_save_rename(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    
+    (dest / "EDGB" / "SAVE").mkdir(parents=True)
+    old_save = dest / "EDGB" / "SAVE" / "Pokemon - Red.sav"
+    old_save.write_text("my save data")
+    
+    app = DummyApp()
+    from sync_everdrive import SyncApp
+    
+    rom_name_map = {"pokemon red": "Pokemon Red"}
+    SyncApp.rename_sd_saves(app, str(dest), "EDGB", "SAVE", "RTC", rom_name_map)
+    
+    # It should rename Pokemon - Red.sav to Pokemon Red.sav
+    assert not old_save.exists()
+    assert (dest / "EDGB" / "SAVE" / "Pokemon Red.sav").exists()
+    assert (dest / "EDGB" / "SAVE" / "Pokemon Red.sav").read_text() == "my save data"
+
+def test_save_prefix_stripping_safety(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    
+    (dest / "EDGB" / "SAVE").mkdir(parents=True)
+    
+    # These should NOT be stripped
+    safe_save1 = dest / "EDGB" / "SAVE" / "Save the World.sav"
+    safe_save1.write_text("save the world")
+    
+    safe_save2 = dest / "EDGB" / "SAVE" / "GBA Explorer.sav"
+    safe_save2.write_text("gba explorer")
+    
+    # This SHOULD be stripped (has actual hardware prefix with underscore)
+    stripped_save = dest / "EDGB" / "SAVE" / "SAVE_Zelda.sav"
+    stripped_save.write_text("zelda save")
+    
+    app = DummyApp()
+    from sync_everdrive import SyncApp
+    
+    rom_name_map = {
+        "save the world": "Save the World",
+        "gba explorer": "GBA Explorer",
+        "zelda": "Zelda"
+    }
+    SyncApp.rename_sd_saves(app, str(dest), "EDGB", "SAVE", "RTC", rom_name_map)
+    
+    # Verify that safe ones remain unchanged
+    assert safe_save1.exists()
+    assert safe_save2.exists()
+    
+    # Verify stripped one is renamed (SAVE_ prefix removed)
+    assert not stripped_save.exists()
+    assert (dest / "EDGB" / "SAVE" / "Zelda.sav").exists()
+
