@@ -21,12 +21,15 @@ jobs:
           - os: windows-2022
             artifact_name: sync_everdrive-windows
             dist_path: dist/sync_everdrive.exe
+            zip_name: sync_everdrive-windows.zip
           - os: macos-latest
             artifact_name: sync_everdrive-macos
             dist_path: dist/sync_everdrive.app
+            zip_name: sync_everdrive-macos.zip
           - os: ubuntu-latest
             artifact_name: sync_everdrive-linux
             dist_path: dist/sync_everdrive
+            zip_name: sync_everdrive-linux.zip
 
     steps:
       - name: Checkout repository
@@ -45,30 +48,52 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            pyinstaller --noconfirm --onefile --windowed --add-data "assets;assets" --icon assets/icon.ico --collect-all customtkinter sync_everdrive.py
-          else
-            pyinstaller --noconfirm --onefile --windowed --add-data "assets:assets" --icon assets/icon.png --collect-all customtkinter sync_everdrive.py
-          fi
+          pyinstaller --clean --noconfirm sync_everdrive.spec
         shell: bash
 
-      - name: Zip artifact (Windows/Linux)
-        if: matrix.os != 'macos-latest'
+      - name: Zip artifact (Windows)
+        if: matrix.os == 'windows-2022'
         run: |
-          # Use different commands for Windows (powershell) vs Linux (zip)
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            powershell -Command "Compress-Archive -Path ${{ matrix.dist_path }} -DestinationPath ${{ matrix.artifact_name }}.zip"
-          else
-            zip -j ${{ matrix.artifact_name }}.zip ${{ matrix.dist_path }}
-          fi
-        shell: bash
+          Compress-Archive -Path ${{ matrix.dist_path }} -DestinationPath ${{ matrix.zip_name }}
+        shell: pwsh
+
+      - name: Zip artifact (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          zip -j ${{ matrix.zip_name }} ${{ matrix.dist_path }}
 
       - name: Zip artifact (macOS)
         if: matrix.os == 'macos-latest'
-        run: zip -r ${{ matrix.artifact_name }}.zip ${{ matrix.dist_path }}
+        run: |
+          zip -r ${{ matrix.zip_name }} ${{ matrix.dist_path }}
 
-      - name: Upload to GitHub Release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.zip_name }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Flatten directory structure
+        run: |
+          mkdir dist-release
+          find release-artifacts -name "*.zip" -exec cp {} dist-release/ \;
+          ls -la dist-release/
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.artifact_name }}.zip
+          files: dist-release/*.zip
           generate_release_notes: true
