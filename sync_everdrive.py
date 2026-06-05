@@ -217,7 +217,7 @@ def add_to_virtual_tree(root, source_path, dest_parts, folder_only=False, fav_li
 class SyncApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Sync Tool for EverDrive GB X7")
+        self.title("Sync Tool for EverDrive (GB/GBA/64)")
         self.geometry("600x850")
         self.resizable(False, False)
         
@@ -304,7 +304,7 @@ class SyncApp(ctk.CTk):
         self.chk_reorganize.pack(anchor="w", padx=10, pady=5)
 
         self.chk_type_var = tk.BooleanVar(value=True)
-        self.chk_type = ctk.CTkCheckBox(opt_frame, text="Separate (GB/GBC)", variable=self.chk_type_var)
+        self.chk_type = ctk.CTkCheckBox(opt_frame, text="Separate Systems/Types (GB/GBC/GBA/N64)", variable=self.chk_type_var)
         self.chk_type.pack(anchor="w", padx=30, pady=2)
 
         self.chk_series_var = tk.BooleanVar(value=True)
@@ -544,7 +544,7 @@ class SyncApp(ctk.CTk):
                 self.step_progress()
 
     def backup_saves(self, source: str, hacks: str, dest: str, os_folder: str) -> None:
-        self.log_msg("Backing up .sav, .srm, and .rtc files to PC...")
+        self.log_msg("Backing up save files to PC...")
         # Choose best backup location: prefer source, fallback to hacks, skip if neither valid
         if source and os.path.isdir(source):
             backup_dir = os.path.join(source, "Saves_Backup")
@@ -560,11 +560,14 @@ class SyncApp(ctk.CTk):
             if any(x in root.split(os.sep) for x in ["System Volume Information", "Saves_Backup"]):
                 continue
             for f in filenames:
-                if f.lower().endswith(('.sav', '.srm', '.rtc', '.fla')):
+                if f.lower().endswith(('.sav', '.srm', '.rtc', '.fla', '.eep', '.sra')):
                     src_file = os.path.join(root, f)
                     rel_path = f
-                    if os_folder in root:
-                        rel_path = os.path.relpath(src_file, os.path.join(dest, os_folder))
+                    root_parts_lower = [p.lower() for p in Path(root).parts]
+                    if os_folder.lower() in root_parts_lower:
+                        idx = root_parts_lower.index(os_folder.lower())
+                        actual_os_path = os.path.join(*Path(root).parts[:idx+1])
+                        rel_path = os.path.relpath(src_file, actual_os_path)
                     
                     save_dest = os.path.join(backup_dir, rel_path)
                     os.makedirs(os.path.dirname(save_dest), exist_ok=True)
@@ -576,19 +579,31 @@ class SyncApp(ctk.CTk):
         backup_dir = os.path.join(source, "Saves_Backup")
         if os.path.isdir(backup_dir):
             self.log_msg("Restoring saves from PC to SD...")
+            save_base = "SAVES" if os_folder.upper() == "GBOS" else "SAVE"
+            rtc_base = "SAVES" if os_folder.upper() == "GBOS" else "RTC"
             restored_files: List[str] = []
             for root, _, filenames in os.walk(backup_dir):
                 for f in filenames:
-                    if f.lower().endswith(('.sav', '.srm', '.rtc', '.fla')):
+                    if f.lower().endswith(('.sav', '.srm', '.rtc', '.fla', '.eep', '.sra')):
                         src_file = os.path.join(root, f)
                         rel_path = os.path.relpath(src_file, backup_dir)
-                        target_path = os.path.join(dest, os_folder, rel_path)
+                        path_parts = Path(rel_path).parts
+                        if len(path_parts) == 1:
+                            if os_folder.lower() == "edgba":
+                                stem, ext = os.path.splitext(f)
+                                save_sub = os.path.join("gamedata", f"{stem}.gba")
+                                target_path = os.path.join(dest, os_folder, save_sub, f)
+                            else:
+                                save_sub = rtc_base if f.lower().endswith('.rtc') else save_base
+                                target_path = os.path.join(dest, os_folder, save_sub, f)
+                        else:
+                            target_path = os.path.join(dest, os_folder, rel_path)
                         os.makedirs(os.path.dirname(target_path), exist_ok=True)
                         shutil.copy2(src_file, target_path)
                         restored_files.append(target_path)
             self.log_msg(f"Restored {len(restored_files)} files.")
 
-    def catalog_sd(self, dest: str) -> Dict[Tuple[int, int, str], List[str]]:
+    def catalog_sd(self, dest: str, rom_exts: set) -> Dict[Tuple[int, int, str], List[str]]:
         catalog: Dict[Tuple[int, int, str], List[str]] = {}
         if os.path.isdir(dest):
             self.log_msg("Cataloging SD card for quick moves...")
@@ -596,7 +611,7 @@ class SyncApp(ctk.CTk):
                 if any(x in root.split(os.sep) for x in ["System Volume Information"]):
                     continue
                 for f in filenames:
-                    if f.lower().endswith(('.gb', '.gbc')):
+                    if os.path.splitext(f.lower())[1] in rom_exts:
                         f_path = os.path.join(root, f)
                         try:
                             f_stat = os.stat(f_path)
@@ -610,7 +625,7 @@ class SyncApp(ctk.CTk):
         """Remove all non-system files/folders from the SD card root (Soft Format).
         This ensures the FAT32 filesystem creates entries in alphabetical order."""
         self.log_msg("Cleaning SD card (preserving EverDrive OS folders)...")
-        system_folders = {"edgb", "gbos", "gbcsys", "system volume information"}
+        system_folders = {"edgb", "gbos", "gbcsys", "ed64", "gbasys", "edgba", "system volume information"}
         for item in os.listdir(dest):
             if item.lower() in system_folders:
                 continue
@@ -625,48 +640,80 @@ class SyncApp(ctk.CTk):
 
     def rename_sd_saves(self, dest: str, os_folder: str, save_base: str, rtc_base: str, rom_name_map: dict) -> None:
         """Rename existing saves on the SD card to match current ROM naming settings."""
-        sys_paths = [
-            (os.path.join(dest, os_folder, save_base), False),
-            (os.path.join(dest, os_folder, rtc_base), True),
-        ]
-        for sp, is_rtc in sys_paths:
-            if not os.path.isdir(sp):
-                continue
-            self.log_msg(f"Checking SD saves folder '{os.path.basename(sp)}' for renames...")
-            for f in os.listdir(sp):
-                full = os.path.join(sp, f)
-                if not os.path.isfile(full):
+        is_gba_pro = (os_folder.lower() == "edgba")
+        if is_gba_pro:
+            gamedata_path = os.path.join(dest, os_folder, "gamedata")
+            if os.path.isdir(gamedata_path):
+                self.log_msg("Checking GBA PRO gamedata folders for renames...")
+                for item in os.listdir(gamedata_path):
+                    item_path = os.path.join(gamedata_path, item)
+                    if os.path.isdir(item_path) and item.lower().endswith(".gba"):
+                        stem = os.path.splitext(item)[0]
+                        clean_stem = str(re.sub(r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_*', '', stem))
+                        if not clean_stem:
+                            continue
+                        fuzzy = get_fuzzy_title(clean_stem)
+                        matched = rom_name_map.get(fuzzy)
+                        if matched is None:
+                            chars = list(clean_stem)
+                            chars_len = len(chars)
+                            for j in range(1, min(21, chars_len - 2)):
+                                sub_str = "".join(itertools.islice(iter(chars), j, None))
+                                matched_candidate = rom_name_map.get(get_fuzzy_title(sub_str))
+                                if matched_candidate is not None:
+                                    matched = matched_candidate
+                                    break
+                        if matched:
+                            new_folder_name = matched + ".gba"
+                            # Rename files inside the folder first
+                            for f in os.listdir(item_path):
+                                f_path = os.path.join(item_path, f)
+                                if os.path.isfile(f_path):
+                                    f_stem, f_ext = os.path.splitext(f)
+                                    if f_stem.lower() == stem.lower():
+                                        new_f_name = matched + f_ext
+                                        new_f_path = os.path.join(item_path, new_f_name)
+                                        if not os.path.exists(new_f_path):
+                                            os.rename(f_path, new_f_path)
+                            
+                            # Rename the folder itself
+                            if item != new_folder_name:
+                                new_folder_path = os.path.join(gamedata_path, new_folder_name)
+                                if not os.path.exists(new_folder_path):
+                                    self.log_msg(f" -> Renaming GBA PRO folder: {item} -> {new_folder_name}")
+                                    os.rename(item_path, new_folder_path)
+        else:
+            sys_paths = [
+                (os.path.join(dest, os_folder, save_base), False),
+                (os.path.join(dest, os_folder, rtc_base), True),
+            ]
+            for sp, is_rtc in sys_paths:
+                if not os.path.isdir(sp):
                     continue
-                stem, ext = os.path.splitext(f)
-                clean_stem: str = str(re.sub(r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_*', '', stem))
-                if not clean_stem:
-                    continue
-                fuzzy = get_fuzzy_title(clean_stem)
-                matched = rom_name_map.get(fuzzy)
-                if matched is None:
-                    # Smart fallback: strip leading chars iteratively
-                    # Note: using itertools.islice to avoid Pyre2 slice type issue on Python 3.14
-                    chars = list(clean_stem)
-                    chars_len = len(chars)
-                    for j in range(1, min(21, chars_len - 2)):
-                        sub_str: str = "".join(itertools.islice(iter(chars), j, None))
-                        sub_fuzzy = get_fuzzy_title(sub_str)
-                        matched_candidate = rom_name_map.get(sub_fuzzy)
-                        if matched_candidate is not None:
-                            matched = matched_candidate
-                            break
-                new_name = (matched if matched else get_clean_rom_name(clean_stem)) + ext
-                if f != new_name:
-                    new_path = os.path.join(sp, new_name)
-                    if not os.path.exists(new_path):
-                        self.log_msg(f" -> Renaming save: {f} -> {new_name}")
-                        os.rename(full, new_path)
-            # Purge subdirectories inside save folders (hardware doesn't support them)
-            for sub in os.listdir(sp):
-                sub_path = os.path.join(sp, sub)
-                if os.path.isdir(sub_path):
-                    self.log_msg(f" -> Removing invalid save subdirectory: {sub}")
-                    shutil.rmtree(sub_path, ignore_errors=True)
+                self.log_msg(f"Checking SD saves folder '{os.path.basename(sp)}' for renames...")
+                for f in os.listdir(sp):
+                    full = os.path.join(sp, f)
+                    if not os.path.isfile(full):
+                        continue
+                    stem, ext = os.path.splitext(f)
+                    clean_stem: str = str(re.sub(r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_*', '', stem))
+                    if not clean_stem:
+                        continue
+                    fuzzy = get_fuzzy_title(clean_stem)
+                    matched = rom_name_map.get(fuzzy)
+                    if matched is None:
+                        # Smart fallback: strip leading chars iteratively
+                        # Note: using itertools.islice to avoid Pyre2 slice type issue on Python 3.14
+                        chars = list(clean_stem)
+                        chars_len = len(chars)
+                        for j in range(1, min(21, chars_len - 2)):
+                            sub_str: str = "".join(itertools.islice(iter(chars), j, None))
+                            sub_fuzzy = get_fuzzy_title(sub_str)
+                            matched_candidate = rom_name_map.get(sub_fuzzy)
+                            if matched_candidate is not None:
+                                matched = matched_candidate
+                                break
+                    new_name = (matched if matched else get_clean_rom_name(clean_stem)) + ext
 
     def _mirror_copy(self, src: str, dest: str) -> None:
         """Recursively mirror-copy src to dest, skipping files that match by size+mtime."""
@@ -722,7 +769,7 @@ class SyncApp(ctk.CTk):
                 if not messagebox.askokcancel("WARNING", f"Dest '{dest}' looks like a system path. Proceed?"):
                     return
                 
-        has_os = any(os.path.exists(os.path.join(dest, d)) for d in ["EDGB", "GBOS", "GBCSYS"])
+        has_os = any(os.path.exists(os.path.join(dest, d)) for d in ["EDGB", "GBOS", "GBCSYS", "ED64", "GBASYS", "EDGBA"])
         if not has_os:
             self.after(0, lambda: messagebox.showerror("Error", "Missing OS folder on SD."))
             return
@@ -730,9 +777,26 @@ class SyncApp(ctk.CTk):
         os_folder = "EDGB"
         if os.path.exists(os.path.join(dest, "GBOS")): os_folder = "GBOS"
         elif os.path.exists(os.path.join(dest, "GBCSYS")): os_folder = "GBCSYS"
+        elif os.path.exists(os.path.join(dest, "ED64")): os_folder = "ED64"
+        elif os.path.exists(os.path.join(dest, "GBASYS")): os_folder = "GBASYS"
+        elif os.path.exists(os.path.join(dest, "EDGBA")): os_folder = "EDGBA"
         
-        save_base = "SAVES" if os_folder == "GBOS" else "SAVE"
-        rtc_base = "SAVES" if os_folder == "GBOS" else "RTC"
+        # Resolve the actual case-preserved folder name on the SD card
+        if os.path.isdir(dest):
+            for item in os.listdir(dest):
+                if item.lower() == os_folder.lower():
+                    os_folder = item
+                    break
+        
+        if os_folder.upper() == "GBOS":
+            save_base = "SAVES"
+            rtc_base = "SAVES"
+        elif os_folder.upper() in {"ED64", "GBASYS", "EDGBA"}:
+            save_base = "SAVE"
+            rtc_base = "SAVE"
+        else:
+            save_base = "SAVE"
+            rtc_base = "RTC"
         
         self.after(0, lambda: self.toggle_ui(False))
         try:
@@ -746,8 +810,19 @@ class SyncApp(ctk.CTk):
             if self.chk_backups_var.get() and os.path.isdir(dest):
                 self.backup_saves(source, hacks, dest, os_folder)
 
+            # Define systems / categories based on target console
+            os_folder_upper = os_folder.upper()
+            if os_folder_upper == "ED64":
+                rom_exts = {".z64", ".n64", ".v64"}
+            elif os_folder_upper in {"GBASYS", "EDGBA"}:
+                rom_exts = {".gba"}
+            else:
+                rom_exts = {".gb", ".gbc"}
+
+            save_exts = {".sav", ".rtc", ".srm", ".fla", ".eep", ".sra"}
+
             # --- SD Cataloging MUST run before clean_sd so we capture existing files for moves --- #
-            sd_catalog = self.catalog_sd(dest)
+            sd_catalog = self.catalog_sd(dest, rom_exts)
 
             # --- SD Cleaning (Soft Format) --- #
             if self.chk_reorganize_var.get():
@@ -763,7 +838,8 @@ class SyncApp(ctk.CTk):
                         try:
                             with zipfile.ZipFile(zf, 'r') as zip_ref:
                                 for member in zip_ref.namelist():
-                                    if member.lower().endswith(('.gb', '.gbc')):
+                                    member_ext = os.path.splitext(member.lower())[1]
+                                    if member_ext in rom_exts:
                                         zip_ref.extract(member, temp_unzip_dir)
                         except Exception as e:
                             self.log_msg(f"Failed to extract {zf.name}: {e}")
@@ -783,8 +859,8 @@ class SyncApp(ctk.CTk):
                     except Exception as e:
                         self.log_msg(f"Failed to load favorites: {e}")
 
-            # GAP 5: Exclude OS subfolders (EDGB, GBOS, GBCSYS) + Saves_Backup from source scan
-            _os_excl = {"saves_backup", "gbcsys", "gbos", "edgb"}
+            # GAP 5: Exclude OS subfolders + Saves_Backup from source scan
+            _os_excl = {"saves_backup", "gbcsys", "gbos", "edgb", "ed64", "gbasys", "edgba"}
 
             # --- Scan Source Files --- #
             all_files = []
@@ -805,10 +881,23 @@ class SyncApp(ctk.CTk):
                     if p.is_file():
                         all_files.append(p)
 
-            gb_files = [f for f in all_files if f.suffix.lower() == ".gb"]
-            gbc_files = [f for f in all_files if f.suffix.lower() == ".gbc"]
-            sav_files = [f for f in all_files if f.suffix.lower() in {".sav", ".rtc", ".srm", ".fla"}]
-            other_files = [f for f in all_files if f.suffix.lower() not in {".gb", ".gbc", ".sav", ".rtc", ".srm", ".fla", ".zip"}]
+            # Categorize ROMs and saves
+            if os_folder_upper == "ED64":
+                system_groups = {
+                    "N64": [f for f in all_files if f.suffix.lower() in {".z64", ".n64", ".v64"}]
+                }
+            elif os_folder_upper in {"GBASYS", "EDGBA"}:
+                system_groups = {
+                    "GBA": [f for f in all_files if f.suffix.lower() == ".gba"]
+                }
+            else:
+                system_groups = {
+                    "GB": [f for f in all_files if f.suffix.lower() == ".gb"],
+                    "GBC": [f for f in all_files if f.suffix.lower() == ".gbc"]
+                }
+
+            sav_files = [f for f in all_files if f.suffix.lower() in save_exts]
+            other_files = [f for f in all_files if f.suffix.lower() not in (rom_exts | save_exts | {".zip"})]
 
             if self.chk_reorganize_var.get():
                 # ==========================================================
@@ -816,44 +905,30 @@ class SyncApp(ctk.CTk):
                 # ==========================================================
                 if self.chk_1g1r_var.get():
                     self.log_msg("Applying 1G1R filter...")
-                    gb_files = get_best_region_games(gb_files, self.chk_usa_var.get(), self.chk_world_var.get(), self.chk_eur_var.get(), self.chk_jpn_var.get())
-                    gbc_files = get_best_region_games(gbc_files, self.chk_usa_var.get(), self.chk_world_var.get(), self.chk_eur_var.get(), self.chk_jpn_var.get())
+                    for sys_name, files in system_groups.items():
+                        system_groups[sys_name] = get_best_region_games(files, self.chk_usa_var.get(), self.chk_world_var.get(), self.chk_eur_var.get(), self.chk_jpn_var.get())
 
                 if self.chk_series_var.get():
                     self.log_msg("Analyzing files for series grouping...")
-                gb_groups = get_series_groups(gb_files) if self.chk_series_var.get() else {}
-                gbc_groups = get_series_groups(gbc_files) if self.chk_series_var.get() else {}
 
                 rom_name_map: Dict[str, str] = {}
                 vRoot = VirtualNode("", True)
 
-                # --- Main Library: GB --- #
-                for f in gb_files:
-                    group = gb_groups.get(str(f.absolute()), "")
-                    parts = ["GB"] if self.chk_type_var.get() else []
-                    if group:
-                        parts.append(group)
-                    elif self.chk_az_var.get():
-                        fc = get_clean_rom_name(f.stem)
-                        parts.append(fc[0].upper() if fc and fc[0].isalpha() else "#")
-                    clean_name = get_clean_rom_name(f.stem, self.chk_tags_var.get())
-                    parts.append(clean_name + f.suffix)
-                    add_to_virtual_tree(vRoot, str(f.absolute()), parts, False, favs)
-                    rom_name_map[get_fuzzy_title(f.stem)] = clean_name
-
-                # --- Main Library: GBC --- #
-                for f in gbc_files:
-                    group = gbc_groups.get(str(f.absolute()), "")
-                    parts = ["GBC"] if self.chk_type_var.get() else []
-                    if group:
-                        parts.append(group)
-                    elif self.chk_az_var.get():
-                        fc = get_clean_rom_name(f.stem)
-                        parts.append(fc[0].upper() if fc and fc[0].isalpha() else "#")
-                    clean_name = get_clean_rom_name(f.stem, self.chk_tags_var.get())
-                    parts.append(clean_name + f.suffix)
-                    add_to_virtual_tree(vRoot, str(f.absolute()), parts, False, favs)
-                    rom_name_map[get_fuzzy_title(f.stem)] = clean_name
+                # Process dynamically categorized main library files
+                for sys_name, files in system_groups.items():
+                    groups = get_series_groups(files) if self.chk_series_var.get() else {}
+                    for f in files:
+                        group = groups.get(str(f.absolute()), "")
+                        parts = [sys_name] if self.chk_type_var.get() else []
+                        if group:
+                            parts.append(group)
+                        elif self.chk_az_var.get():
+                            fc = get_clean_rom_name(f.stem)
+                            parts.append(fc[0].upper() if fc and fc[0].isalpha() else "#")
+                        clean_name = get_clean_rom_name(f.stem, self.chk_tags_var.get())
+                        parts.append(clean_name + f.suffix)
+                        add_to_virtual_tree(vRoot, str(f.absolute()), parts, False, favs)
+                        rom_name_map[get_fuzzy_title(f.stem)] = clean_name
 
                 # GAP 1: ROM Hacks folder → [ROM Hacks] with full 1G1R/series/A-Z support
                 if hacks and os.path.isdir(hacks):
@@ -861,7 +936,7 @@ class SyncApp(ctk.CTk):
                     hack_roms = [
                         p for p in Path(hacks).rglob("*")
                         if p.is_file() and not p.name.startswith("._") and p.name != ".DS_Store"
-                        and p.suffix.lower() in {".gb", ".gbc"}
+                        and p.suffix.lower() in rom_exts
                     ]
                     if self.chk_1g1r_var.get():
                         hack_roms = get_best_region_games(hack_roms, self.chk_usa_var.get(), self.chk_world_var.get(), self.chk_eur_var.get(), self.chk_jpn_var.get())
@@ -880,7 +955,7 @@ class SyncApp(ctk.CTk):
                         rom_name_map[get_fuzzy_title(f.stem)] = clean_name
                     # Non-ROM files from hacks folder (readmes, images, etc.)
                     for p in Path(hacks).rglob("*"):
-                        if p.is_file() and p.suffix.lower() not in {".gb", ".gbc", ".sav", ".rtc", ".srm", ".fla", ".zip"}:
+                        if p.is_file() and p.suffix.lower() not in (rom_exts | save_exts | {".zip"}):
                             rel = os.path.relpath(str(p), hacks)
                             hack_parts = ["[ROM Hacks]"] + rel.replace("\\", "/").split("/")
                             add_to_virtual_tree(vRoot, str(p.absolute()), hack_parts, False, favs)
@@ -895,19 +970,21 @@ class SyncApp(ctk.CTk):
                         except ValueError:
                             pass
 
-                # GAP 2: Pre-seed OS save/RTC nodes and place .sav files from source/hacks
-                add_to_virtual_tree(vRoot, "", [os_folder, save_base], True, favs)
-                add_to_virtual_tree(vRoot, "", [os_folder, rtc_base], True, favs)
+                # GAP 2: Pre-seed OS save nodes and place save files
+                if os_folder.lower() == "edgba":
+                    add_to_virtual_tree(vRoot, "", [os_folder, "gamedata"], True, favs)
+                else:
+                    add_to_virtual_tree(vRoot, "", [os_folder, save_base], True, favs)
+                    add_to_virtual_tree(vRoot, "", [os_folder, rtc_base], True, favs)
 
                 all_saves = list(sav_files)
                 if hacks and os.path.isdir(hacks):
                     for p in Path(hacks).rglob("*"):
-                        if p.is_file() and p.suffix.lower() in {".sav", ".rtc", ".srm", ".fla"}:
+                        if p.is_file() and p.suffix.lower() in save_exts:
                             all_saves.append(p)
 
                 for s in all_saves:
                     final_ext = s.suffix
-                    save_sub = rtc_base if final_ext.lower() == ".rtc" else save_base
                     clean_base: str = str(re.sub(r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_*', '', s.stem))
                     if not clean_base:
                         continue
@@ -922,7 +999,12 @@ class SyncApp(ctk.CTk):
                                 matched_name = cand
                                 break
                     final_save_name = (matched_name if matched_name else get_clean_rom_name(clean_base)) + final_ext
-                    add_to_virtual_tree(vRoot, str(s.absolute()), [os_folder, save_sub, final_save_name], False, favs)
+                    if os_folder.lower() == "edgba":
+                        rom_folder_name = (matched_name if matched_name else get_clean_rom_name(clean_base)) + ".gba"
+                        add_to_virtual_tree(vRoot, str(s.absolute()), [os_folder, "gamedata", rom_folder_name, final_save_name], False, favs)
+                    else:
+                        save_sub = rtc_base if final_ext.lower() == ".rtc" else save_base
+                        add_to_virtual_tree(vRoot, str(s.absolute()), [os_folder, save_sub, final_save_name], False, favs)
 
                 # Count file nodes for progress bar
                 def count(n):
@@ -941,20 +1023,20 @@ class SyncApp(ctk.CTk):
             else:
                 # ==========================================================
                 # BYPASS MODE — direct mirror copy when Reorganize is OFF
-                # Matches PS script: 1G1R applied to hacks, saves fuzzy-named
                 # ==========================================================
                 self.log_msg("Reorganize is OFF — syncing source directly...")
                 if source and os.path.isdir(source):
                     self._mirror_copy(source, dest)
 
-                # Fix subdirectories in system save folders (hardware doesn't support them)
-                for sp in [os.path.join(dest, os_folder, save_base), os.path.join(dest, os_folder, rtc_base)]:
-                    if os.path.isdir(sp):
-                        for sub in os.listdir(sp):
-                            sub_path = os.path.join(sp, sub)
-                            if os.path.isdir(sub_path):
-                                self.log_msg(f" -> Removing invalid save subdirectory: {sub}")
-                                shutil.rmtree(sub_path, ignore_errors=True)
+                # Fix subdirectories in system save folders (hardware doesn't support them except GBA PRO)
+                if os_folder.lower() != "edgba":
+                    for sp in [os.path.join(dest, os_folder, save_base), os.path.join(dest, os_folder, rtc_base)]:
+                        if os.path.isdir(sp):
+                            for sub in os.listdir(sp):
+                                sub_path = os.path.join(sp, sub)
+                                if os.path.isdir(sub_path):
+                                    self.log_msg(f" -> Removing invalid save subdirectory: {sub}")
+                                    shutil.rmtree(sub_path, ignore_errors=True)
 
                 if hacks and os.path.isdir(hacks):
                     self.log_msg("Syncing ROM Hacks into '[ROM Hacks]' folder...")
@@ -965,7 +1047,7 @@ class SyncApp(ctk.CTk):
                     bypass_hack_roms = [
                         p for p in Path(hacks).rglob("*")
                         if p.is_file() and not p.name.startswith("._") and p.name != ".DS_Store"
-                        and p.suffix.lower() in {".gb", ".gbc"}
+                        and p.suffix.lower() in rom_exts
                     ]
                     if self.chk_1g1r_var.get():
                         bypass_hack_roms = get_best_region_games(bypass_hack_roms, self.chk_usa_var.get(), self.chk_world_var.get(), self.chk_eur_var.get(), self.chk_jpn_var.get())
@@ -990,16 +1072,17 @@ class SyncApp(ctk.CTk):
                         self.step_progress()
 
                     # Fuzzy-match and place .sav files from hacks into OS save folders
-                    hack_save_dir = os.path.join(dest, os_folder, save_base)
-                    hack_rtc_dir = os.path.join(dest, os_folder, rtc_base)
-                    os.makedirs(hack_save_dir, exist_ok=True)
-                    os.makedirs(hack_rtc_dir, exist_ok=True)
                     for p in Path(hacks).rglob("*"):
-                        if p.is_file() and p.suffix.lower() in {".sav", ".rtc", ".srm", ".fla"}:
-                            save_sub_dir = hack_rtc_dir if p.suffix.lower() == ".rtc" else hack_save_dir
+                        if p.is_file() and p.suffix.lower() in save_exts:
                             clean_sav: str = str(re.sub(r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_*', '', p.stem))
                             matched_sav = bypass_rom_name_map.get(get_fuzzy_title(clean_sav))
                             final_sav_name = (matched_sav if matched_sav else get_clean_rom_name(clean_sav)) + p.suffix
+                            if os_folder.lower() == "edgba":
+                                rom_folder_name = (matched_sav if matched_sav else get_clean_rom_name(clean_sav)) + ".gba"
+                                save_sub_dir = os.path.join(dest, os_folder, "gamedata", rom_folder_name)
+                            else:
+                                save_sub_dir = os.path.join(dest, os_folder, rtc_base if p.suffix.lower() == ".rtc" else save_base)
+                            os.makedirs(save_sub_dir, exist_ok=True)
                             shutil.copy2(str(p), os.path.join(save_sub_dir, final_sav_name))
 
             # --- GBCSYS Payload --- #
