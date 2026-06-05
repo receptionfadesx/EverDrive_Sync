@@ -10,7 +10,7 @@
 
 A comprehensive, power-user cross-platform GUI utility built in Python for managing, organizing, and syncing legally backed-up Game Boy, Game Boy Color, Game Boy Advance, and Nintendo 64 ROMs to EverDrive flash cartridges (including EDGB, GBOS, GBCSYS, ED64, GBASYS, and EDGBA / GBA Pro). 
 
-![EverDrive Sync Tool GUI](assets/Screenshot.png)
+<img src="assets/Screenshot.png" width="400" alt="EverDrive Sync Tool GUI">
 
 EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alphabetical directory sorting, and strict folder structures for save files and OS files (e.g., `GBCSYS`, `EDGB`, `ED64`, `GBASYS`, `EDGBA`). This script automates the tedious process of formatting, organizing ROMs into series or A-Z folders, standardizing filenames, and ensuring your precious save files remain intact and correctly linked.
 
