@@ -18,7 +18,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2022
             artifact_name: sync_everdrive-windows
             dist_path: dist/sync_everdrive.exe
           - os: macos-latest
