@@ -625,7 +625,7 @@ class SyncApp(ctk.CTk):
         """Remove all non-system files/folders from the SD card root (Soft Format).
         This ensures the FAT32 filesystem creates entries in alphabetical order."""
         self.log_msg("Cleaning SD card (preserving EverDrive OS folders)...")
-        system_folders = {"edgb", "gbos", "gbcsys", "ed64", "gbasys", "edgba", "system volume information"}
+        system_folders = {"edgb", "gbos", "gbcsys", "ed64", "gbasys", "edgba", "system volume information", ".sync_temp"}
         for item in os.listdir(dest):
             if item.lower() in system_folders:
                 continue
@@ -714,6 +714,13 @@ class SyncApp(ctk.CTk):
                                 matched = matched_candidate
                                 break
                     new_name = (matched if matched else get_clean_rom_name(clean_stem)) + ext
+                    if f != new_name:
+                        new_full = os.path.join(sp, new_name)
+                        if not os.path.exists(new_full):
+                            self.log_msg(f" -> Renaming SD save: {f} -> {new_name}")
+                            os.rename(full, new_full)
+                        else:
+                            self.log_msg(f"Warning: Could not rename '{f}' to '{new_name}' because destination already exists.")
 
     def _mirror_copy(self, src: str, dest: str) -> None:
         """Recursively mirror-copy src to dest, skipping files that match by size+mtime."""
@@ -805,6 +812,7 @@ class SyncApp(ctk.CTk):
             self.progress_bar.set(0)
             
             temp_unzip_dir = None
+            temp_sd_dir = None
             
             # --- Save Backup --- #
             if self.chk_backups_var.get() and os.path.isdir(dest):
@@ -823,6 +831,29 @@ class SyncApp(ctk.CTk):
 
             # --- SD Cataloging MUST run before clean_sd so we capture existing files for moves --- #
             sd_catalog = self.catalog_sd(dest, rom_exts)
+
+            # --- Move cataloged files to a temporary location on SD card before cleaning --- #
+            if self.chk_reorganize_var.get() and sd_catalog:
+                temp_sd_dir = os.path.join(dest, ".sync_temp")
+                os.makedirs(temp_sd_dir, exist_ok=True)
+                updated_catalog = {}
+                file_counter = 0
+                for sig, paths in sd_catalog.items():
+                    new_paths = []
+                    for path in paths:
+                        if os.path.exists(path):
+                            ext = os.path.splitext(path)[1]
+                            temp_file_name = f"temp_{file_counter}{ext}"
+                            temp_file_path = os.path.join(temp_sd_dir, temp_file_name)
+                            try:
+                                shutil.move(path, temp_file_path)
+                                new_paths.append(temp_file_path)
+                                file_counter += 1
+                            except OSError as e:
+                                self.log_msg(f"Warning: Could not move {path} to temp SD location: {e}")
+                    if new_paths:
+                        updated_catalog[sig] = new_paths
+                sd_catalog = updated_catalog
 
             # --- SD Cleaning (Soft Format) --- #
             if self.chk_reorganize_var.get():
@@ -1112,6 +1143,8 @@ class SyncApp(ctk.CTk):
         finally:
             if temp_unzip_dir and os.path.exists(temp_unzip_dir):
                 shutil.rmtree(temp_unzip_dir)
+            if temp_sd_dir and os.path.exists(temp_sd_dir):
+                shutil.rmtree(temp_sd_dir, ignore_errors=True)
             self.after(0, lambda: self.toggle_ui(True))
             self.progress_bar.set(0)
 

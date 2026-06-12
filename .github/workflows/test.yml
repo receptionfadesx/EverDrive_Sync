@@ -3,8 +3,16 @@ name: Run Tests
 on:
   push:
     branches: [ main, "feature/*" ]
+    paths:
+      - "**.py"
+      - "requirements.txt"
+      - ".github/workflows/test.yml"
   pull_request:
     branches: [ main ]
+    paths:
+      - "**.py"
+      - "requirements.txt"
+      - ".github/workflows/test.yml"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true

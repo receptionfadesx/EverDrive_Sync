@@ -125,6 +125,55 @@ class DummyApp:
     def log_msg(self, msg):
         self.logs.append(msg)
 
+from sync_everdrive import SyncApp
+
+class MockSyncApp(SyncApp):
+    def __init__(self, source="", dest="", hacks="", gbcsys="", backups=False, zip=False, fav=False, reorg=True, usa=True, world=True, eur=True, jpn=True, series=False, type_folders=True, az=False, tags=True, restore=False, folders_last=False, recent=False):
+        self.logs = []
+        self.prog_max = 1
+        self.config_data = {
+            "Source": str(source), "Hacks": str(hacks), "GbcSysPayload": str(gbcsys), "Dest": str(dest)
+        }
+        self.txt_source = type('MockEntry', (), {'get': lambda *a: str(self.config_data["Source"])})()
+        self.txt_hacks = type('MockEntry', (), {'get': lambda *a: str(self.config_data["Hacks"])})()
+        self.txt_gbcsys = type('MockEntry', (), {'get': lambda *a: str(self.config_data["GbcSysPayload"])})()
+        self.txt_dest = type('MockEntry', (), {'get': lambda *a: str(self.config_data["Dest"])})()
+        
+        self.chk_backups_var = type('MockVar', (), {'get': lambda *a: backups})()
+        self.chk_zip_var = type('MockVar', (), {'get': lambda *a: zip})()
+        self.chk_fav_var = type('MockVar', (), {'get': lambda *a: fav})()
+        self.chk_reorganize_var = type('MockVar', (), {'get': lambda *a: reorg})()
+        self.chk_1g1r_var = type('MockVar', (), {'get': lambda *a: False})()
+        self.chk_usa_var = type('MockVar', (), {'get': lambda *a: usa})()
+        self.chk_world_var = type('MockVar', (), {'get': lambda *a: world})()
+        self.chk_eur_var = type('MockVar', (), {'get': lambda *a: eur})()
+        self.chk_jpn_var = type('MockVar', (), {'get': lambda *a: jpn})()
+        self.chk_series_var = type('MockVar', (), {'get': lambda *a: series})()
+        self.chk_type_var = type('MockVar', (), {'get': lambda *a: type_folders})()
+        self.chk_az_var = type('MockVar', (), {'get': lambda *a: az})()
+        self.chk_tags_var = type('MockVar', (), {'get': lambda *a: tags})()
+        self.chk_restore_var = type('MockVar', (), {'get': lambda *a: restore})()
+        self.chk_folders_last_var = type('MockVar', (), {'get': lambda *a: folders_last})()
+        self.chk_recent_var = type('MockVar', (), {'get': lambda *a: recent})()
+        
+        self.progress_bar = type('MockProgress', (), {'set': lambda *a: None, 'get': lambda *a: 0.0})()
+        
+    def log_msg(self, msg):
+        self.logs.append(msg)
+        
+    def update_idletasks(self):
+        pass
+        
+    def update(self):
+        pass
+        
+    def toggle_ui(self, enabled):
+        pass
+        
+    def after(self, ms, func, *args):
+        if func:
+            func(*args)
+
 def test_backup_restore_case_insensitivity(tmp_path):
     source = tmp_path / "source"
     dest = tmp_path / "sd_card"
@@ -240,3 +289,317 @@ def test_gba_pro_sync_reorganize(tmp_path):
     SyncApp.rename_sd_saves(app, str(dest), "edgba", "SAVE", "SAVE", rom_name_map)
     assert (dest / "edgba" / "gamedata" / "Metroid Fusion.gba").exists()
     assert (dest / "edgba" / "gamedata" / "Metroid Fusion.gba" / "Metroid Fusion.sav").exists()
+
+def test_standard_save_rename(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    
+    (dest / "EDGB" / "SAVE").mkdir(parents=True)
+    old_save = dest / "EDGB" / "SAVE" / "Pokemon - Red.sav"
+    old_save.write_text("my save data")
+    
+    app = DummyApp()
+    from sync_everdrive import SyncApp
+    
+    rom_name_map = {"pokemon red": "Pokemon Red"}
+    SyncApp.rename_sd_saves(app, str(dest), "EDGB", "SAVE", "RTC", rom_name_map)
+    
+    # It should rename Pokemon - Red.sav to Pokemon Red.sav
+    assert not old_save.exists()
+    assert (dest / "EDGB" / "SAVE" / "Pokemon Red.sav").exists()
+    assert (dest / "EDGB" / "SAVE" / "Pokemon Red.sav").read_text() == "my save data"
+
+def test_save_prefix_stripping_safety(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    
+    (dest / "EDGB" / "SAVE").mkdir(parents=True)
+    
+    # These should NOT be stripped
+    safe_save1 = dest / "EDGB" / "SAVE" / "Save the World.sav"
+    safe_save1.write_text("save the world")
+    
+    safe_save2 = dest / "EDGB" / "SAVE" / "GBA Explorer.sav"
+    safe_save2.write_text("gba explorer")
+    
+    # This SHOULD be stripped (has actual hardware prefix with underscore)
+    stripped_save = dest / "EDGB" / "SAVE" / "SAVE_Zelda.sav"
+    stripped_save.write_text("zelda save")
+    
+    app = DummyApp()
+    from sync_everdrive import SyncApp
+    
+    rom_name_map = {
+        "save the world": "Save the World",
+        "gba explorer": "GBA Explorer",
+        "zelda": "Zelda"
+    }
+    SyncApp.rename_sd_saves(app, str(dest), "EDGB", "SAVE", "RTC", rom_name_map)
+    
+    # Verify that safe ones remain unchanged
+    assert safe_save1.exists()
+    assert safe_save2.exists()
+    
+    # Verify stripped one is renamed (SAVE_ prefix removed)
+    assert not stripped_save.exists()
+    assert (dest / "EDGB" / "SAVE" / "Zelda.sav").exists()
+
+def test_smart_sync_local_move(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    
+    # Create OS folder on SD card to pass validation
+    (dest / "EDGB").mkdir(parents=True)
+    
+    # Create a ROM in source
+    rom_src = source / "Bomberman Max - Blue Champion (USA).gbc"
+    rom_src.write_text("dummy rom data")
+    
+    # Create same ROM in destination to simulate it already being there (so it gets cataloged and moved)
+    rom_dest_dir = dest / "GBC"
+    rom_dest_dir.mkdir()
+    rom_dest = rom_dest_dir / "Bomberman Max - Blue Champion (USA).gbc"
+    rom_dest.write_text("dummy rom data")
+    
+    # Make sure timestamps and sizes match
+    import os
+    stat_src = os.stat(rom_src)
+    os.utime(rom_dest, (stat_src.st_atime, stat_src.st_mtime))
+    
+    app = MockSyncApp(source=str(source), dest=str(dest))
+    
+    # Mock messagebox
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo') as mock_info, \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        
+        # Verify no error messagebox was shown
+        mock_error.assert_not_called()
+        mock_info.assert_called_once()
+        
+    # Verify the ROM was moved successfully to the new sorted path under GBC/
+    new_rom_path = dest / "GBC" / "Bomberman Max - Blue Champion (USA).gbc"
+    assert new_rom_path.exists()
+    assert new_rom_path.read_text() == "dummy rom data"
+    
+    # Verify the temporary sync directory was cleaned up
+    assert not (dest / ".sync_temp").exists()
+
+def test_mirror_copy(tmp_path):
+    src = tmp_path / "src"
+    dest = tmp_path / "dest"
+    src.mkdir()
+    dest.mkdir()
+    
+    # Create files in src
+    f1 = src / "game1.gb"
+    f1.write_text("data1")
+    
+    sub = src / "subdir"
+    sub.mkdir()
+    f2 = sub / "game2.gb"
+    f2.write_text("data2")
+    
+    app = MockSyncApp()
+    app.run_sync = lambda *a: None
+    
+    app._mirror_copy(str(src), str(dest))
+    
+    # Verify both are copied
+    assert (dest / "game1.gb").exists()
+    assert (dest / "subdir" / "game2.gb").exists()
+    assert (dest / "game1.gb").read_text() == "data1"
+    
+    # Modify one file in src, keep other same
+    f1.write_text("data1_modified")
+    import os
+    # Change mtime of f2 in dest so it doesn't match
+    d2 = dest / "subdir" / "game2.gb"
+    os.utime(d2, (0, 0))
+    
+    # Run mirror copy again
+    app._mirror_copy(str(src), str(dest))
+    
+    assert (dest / "game1.gb").read_text() == "data1_modified"
+
+def test_sync_bypass_mode(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    
+    # Create OS folder on dest
+    (dest / "EDGB").mkdir(parents=True)
+    
+    # Create files in source
+    (source / "game1.gb").write_text("data1")
+    
+    app = MockSyncApp(source=str(source), dest=str(dest), reorg=False)
+    
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo') as mock_info, \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+        mock_info.assert_called_once()
+        
+    # Verify file is copied directly without GBC or other type folders
+    assert (dest / "game1.gb").exists()
+    assert (dest / "game1.gb").read_text() == "data1"
+
+def test_sync_zip_extraction(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    
+    # Create OS folder
+    (dest / "EDGB").mkdir(parents=True)
+    
+    # Create a zip file with a ROM
+    import zipfile
+    zip_path = source / "games.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("zipped_game.gb", "zip data")
+        
+    app = MockSyncApp(source=str(source), dest=str(dest), zip=True)
+    
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo') as mock_info, \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+        mock_info.assert_called_once()
+        
+    # Verify the zipped game was extracted and placed under GB
+    assert (dest / "GB" / "zipped game.gb").exists()
+    assert (dest / "GB" / "zipped game.gb").read_text() == "zip data"
+
+def test_sync_gbcsys_payload(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    payload = tmp_path / "payload"
+    source.mkdir()
+    dest.mkdir()
+    payload.mkdir()
+    
+    # Create OS folder GBCSYS
+    (dest / "GBCSYS").mkdir(parents=True)
+    (source / "game1.gbc").write_text("game_data")
+    (payload / "payload_file.bin").write_text("payload_data")
+    
+    app = MockSyncApp(source=str(source), dest=str(dest), gbcsys=str(payload))
+    
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo') as mock_info, \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+        mock_info.assert_called_once()
+        
+    # Verify both main ROM and payload system files are copied
+    assert (dest / "GBC" / "game1.gbc").exists()
+    assert (dest / "GBCSYS" / "payload_file.bin").exists()
+    assert (dest / "GBCSYS" / "payload_file.bin").read_text() == "payload_data"
+
+def test_load_save_config(tmp_path):
+    source = "/path/to/source"
+    dest = "/path/to/dest"
+    hacks = "/path/to/hacks"
+    gbcsys = "/path/to/gbcsys"
+    
+    config_file = tmp_path / "config.json"
+    
+    from unittest.mock import patch
+    with patch('sync_everdrive.CONFIG_FILE', str(config_file)):
+        app = MockSyncApp(source=source, dest=dest, hacks=hacks, gbcsys=gbcsys)
+        
+        # Verify initial config saving
+        app.save_config()
+        assert config_file.exists()
+        
+        import json
+        with open(config_file, "r") as f:
+            data = json.load(f)
+        assert data["Source"] == source
+        assert data["Dest"] == dest
+        assert data["Hacks"] == hacks
+        assert data["GbcSysPayload"] == gbcsys
+        
+        # Test loading config
+        app2 = MockSyncApp()
+        # Mock widgets with empty entries
+        app2.txt_source = type('MockEntry', (), {'get': lambda *a: "", 'insert': lambda *a: None})()
+        app2.txt_dest = type('MockEntry', (), {'get': lambda *a: "", 'insert': lambda *a: None})()
+        app2.txt_hacks = type('MockEntry', (), {'get': lambda *a: "", 'insert': lambda *a: None})()
+        app2.txt_gbcsys = type('MockEntry', (), {'get': lambda *a: "", 'insert': lambda *a: None})()
+        
+        app2.load_config()
+        assert app2.config_data["Source"] == source
+        assert app2.config_data["Dest"] == dest
+        assert app2.config_data["Hacks"] == hacks
+        assert app2.config_data["GbcSysPayload"] == gbcsys
+
+def test_sync_validation_errors(tmp_path):
+    dest = tmp_path / "sd_card"
+    dest.mkdir()
+    
+    from unittest.mock import patch
+    
+    with patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        # 1. Missing source and hacks
+        app = MockSyncApp(source="", hacks="", dest=str(dest))
+        app.run_sync()
+        mock_error.assert_called_with("Error", "Source path required.")
+        mock_error.reset_mock()
+        
+        # 2. Invalid destination
+        app = MockSyncApp(source="/valid/source", dest="/invalid/dest")
+        app.run_sync()
+        mock_error.assert_called_with("Error", "Invalid Dest path.")
+        mock_error.reset_mock()
+        
+        # 3. Source matches destination (Self-Sync error)
+        app = MockSyncApp(source=str(dest), dest=str(dest))
+        app.run_sync()
+        mock_error.assert_called_with("Error", "Source and Dest cannot match.")
+        mock_error.reset_mock()
+        
+        # 4. Missing EverDrive OS folder
+        app = MockSyncApp(source=str(tmp_path), dest=str(dest))
+        app.run_sync()
+        mock_error.assert_called_with("Error", "Missing OS folder on SD.")
+
+def test_mac_cleanup(tmp_path):
+    app = MockSyncApp()
+    
+    from unittest.mock import patch
+    import subprocess
+    
+    # 1. Test Darwin execution
+    with patch('platform.system', return_value='Darwin'), \
+         patch('subprocess.run') as mock_run:
+        app.mac_cleanup("/test/path")
+        mock_run.assert_called_once_with(
+            ["dot_clean", "-m", "/test/path"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        
+    # 2. Test non-Darwin execution
+    with patch('platform.system', return_value='Windows'), \
+         patch('subprocess.run') as mock_run:
+        app.mac_cleanup("/test/path")
+        mock_run.assert_not_called()

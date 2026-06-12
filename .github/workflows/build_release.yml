@@ -55,7 +55,6 @@ jobs:
       - name: Zip artifact (Windows/Linux)
         if: matrix.os != 'macos-latest'
         run: |
-          # Use different commands for Windows (powershell) vs Linux (zip)
           if [ "${{ matrix.os }}" = "windows-2022" ]; then
             powershell -Command "Compress-Archive -Path ${{ matrix.dist_path }} -DestinationPath ${{ matrix.artifact_name }}.zip"
           else

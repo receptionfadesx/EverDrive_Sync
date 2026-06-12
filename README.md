@@ -1,4 +1,4 @@
-# Sync Tool for EverDrive GB X7
+# Sync Tool for EverDrive (GB/GBA/64)
 
 <p align="center">
   <img src="assets/app_logo.png" width="600" alt="EverDrive Sync Logo">
@@ -8,11 +8,11 @@
 
 **⚠️ WARNING: USE AT YOUR OWN RISK. It is highly recommended to test this tool using a secondary or backup SD card first before modifying your primary library.**
 
-A comprehensive, power-user cross-platform GUI utility built in Python for managing, organizing, and syncing legally backed-up Game Boy and Game Boy Color ROMs to EverDrive-GB X7 (and similar) flash cartridges. 
+A comprehensive, power-user cross-platform GUI utility built in Python for managing, organizing, and syncing legally backed-up Game Boy, Game Boy Color, Game Boy Advance, and Nintendo 64 ROMs to EverDrive flash cartridges (including EDGB, GBOS, GBCSYS, ED64, GBASYS, and EDGBA / GBA Pro). 
 
-![EverDrive Sync Tool GUI](assets/Screenshot.png)
+<img src="assets/Screenshot.png" width="400" alt="EverDrive Sync Tool GUI">
 
-EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alphabetical directory sorting, and strict folder structures for save files and OS files (e.g., `GBCSYS`, `EDGB`). This script automates the tedious process of formatting, organizing ROMs into series or A-Z folders, standardizing filenames, and ensuring your precious save files remain intact and correctly linked.
+EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alphabetical directory sorting, and strict folder structures for save files and OS files (e.g., `GBCSYS`, `EDGB`, `ED64`, `GBASYS`, `EDGBA`). This script automates the tedious process of formatting, organizing ROMs into series or A-Z folders, standardizing filenames, and ensuring your precious save files remain intact and correctly linked.
 
 ## Features
 
@@ -39,8 +39,8 @@ EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alpha
 - **Save File & RTC Management**:
   - Automatically backs up `.sav`, `.srm`, `.rtc`, `.fla`, and `.snap` files from your SD card to your PC before making drastic changes. Perfectly preserves original extensions.
   - Restores saves perfectly, matching them to dynamically renamed ROMs.
-  - Routes save files into the correct flat hardware directory (e.g., `GBCSYS/SAVE` or `EDGB/SAVE`).
-  - **Auto-renames existing saves on the SD card** to guarantee they match new ROM naming conventions.
+  - Routes save files into the correct hardware directory (e.g., `GBCSYS/SAVE`, `EDGB/SAVE`, `ED64/SAVE`, or GBA Pro's nested `edgba/gamedata` structure).
+  - **Auto-renames existing saves on the SD card** to guarantee they match new ROM naming conventions (with safety guards protecting titles like *"Save the World"* or *"GBA Explorer"* from incorrect prefix stripping).
 
 ### 🌟 1:1 PowerShell Legacy Parity
 The Python logic engine has undergone a massive audit and is now **100% feature complete and 1:1 with the original advanced PowerShell script**. This includes edge cases like:
