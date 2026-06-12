@@ -30,6 +30,56 @@ ctk.set_default_color_theme("blue")
 
 CONFIG_FILE = os.path.expanduser("~/.everdrive_sync_config.json")
 
+SAVE_EXTS = {".sav", ".srm", ".rtc", ".fla", ".eep", ".sra", ".snap"}
+
+BACKUP_SNAPSHOT_RE = re.compile(r'^\d{4}-\d{2}-\d{2}_\d{6}$')
+
+class SyncCancelled(Exception):
+    """Raised inside the sync worker when the user cancels."""
+
+def check_cancel(app):
+    ev = getattr(app, "cancel_event", None)
+    if ev is not None and ev.is_set():
+        raise SyncCancelled()
+
+def mtimes_match(a, b):
+    # FAT32 stores modification times with 2-second resolution, so copies to
+    # the SD card can land up to 2 seconds off the source mtime.
+    return abs(int(a) - int(b)) <= 2
+
+def catalog_pop_match(catalog, size, mtime):
+    """Pop and return a cataloged SD path matching size + mtime (FAT32 tolerant)."""
+    entries = catalog.get(size)
+    if not entries:
+        return None
+    for i, (entry_mtime, path) in enumerate(entries):
+        if mtimes_match(entry_mtime, mtime):
+            entries.pop(i)
+            return path
+    return None
+
+def catalog_discard_path(catalog, size, path):
+    entries = catalog.get(size)
+    if entries:
+        catalog[size] = [e for e in entries if e[1] != path]
+
+def list_backup_snapshots(backup_root):
+    if not os.path.isdir(backup_root):
+        return []
+    return sorted(
+        d for d in os.listdir(backup_root)
+        if BACKUP_SNAPSHOT_RE.match(d) and os.path.isdir(os.path.join(backup_root, d))
+    )
+
+def prune_backups(backup_root, keep=5, log=None):
+    for d in list_backup_snapshots(backup_root)[:-keep]:
+        try:
+            shutil.rmtree(os.path.join(backup_root, d))
+            if log:
+                log(f"Pruned old save backup: {d}")
+        except OSError:
+            pass
+
 def get_clean_rom_name(base_name, preserve_tags=False):
     clean = base_name
     suffix = ""
@@ -215,15 +265,24 @@ def add_to_virtual_tree(root, source_path, dest_parts, folder_only=False, fav_li
         current = child
 
 class SyncApp(ctk.CTk):
+    # Class-level defaults so attribute lookups never fall through to
+    # tkinter's __getattr__ delegation on partially-initialized instances
+    # (e.g. headless/test subclasses that skip CTk.__init__).
+    dry_run = False
+    cancel_event = None
+    session_log = None
+
     def __init__(self):
         super().__init__()
         self.title("Sync Tool for EverDrive (GB/GBA/64)")
-        self.geometry("600x850")
+        self.geometry("600x920")
         self.resizable(False, False)
-        
+
         self.config_data = {
             "Source": "", "Hacks": "", "GbcSysPayload": "", "Dest": ""
         }
+        self.cancel_event = threading.Event()
+        self.session_log: List[str] = []
         self.load_config()
         self.set_app_icon()
         self.create_widgets()
@@ -366,6 +425,14 @@ class SyncApp(ctk.CTk):
         self.chk_fav = ctk.CTkCheckBox(opt_frame, text="Advanced: Push favorites to top", variable=self.chk_fav_var)
         self.chk_fav.pack(anchor="w", padx=10, pady=2)
 
+        self.chk_eject_var = tk.BooleanVar(value=False)
+        self.chk_eject = ctk.CTkCheckBox(opt_frame, text="Eject SD card after sync", variable=self.chk_eject_var)
+        self.chk_eject.pack(anchor="w", padx=10, pady=2)
+
+        self.chk_dryrun_var = tk.BooleanVar(value=False)
+        self.chk_dryrun = ctk.CTkCheckBox(opt_frame, text="Dry Run (preview only — no changes)", variable=self.chk_dryrun_var)
+        self.chk_dryrun.pack(anchor="w", padx=10, pady=2)
+
         self.txt_log = ctk.CTkTextbox(self, height=150, font=("Consolas", 12))
         self.txt_log.pack(pady=10, padx=20, fill="x")
         self.txt_log.insert("0.0", "Ready to sync.\n")
@@ -375,8 +442,12 @@ class SyncApp(ctk.CTk):
         self.progress_bar.pack(pady=5, padx=20, fill="x")
         self.progress_bar.set(0)
 
-        self.btn_start = ctk.CTkButton(self, text="Start Sync", fg_color="green", hover_color="darkgreen", command=self.start_sync_thread)
-        self.btn_start.pack(pady=10)
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(pady=10)
+        self.btn_start = ctk.CTkButton(btn_frame, text="Start Sync", fg_color="green", hover_color="darkgreen", command=self.start_sync_thread)
+        self.btn_start.pack(side="left", padx=5)
+        self.btn_cancel = ctk.CTkButton(btn_frame, text="Cancel", fg_color="firebrick", hover_color="darkred", state="disabled", command=self.cancel_sync)
+        self.btn_cancel.pack(side="left", padx=5)
 
     def toggle_reorg(self):
         state = "normal" if self.chk_reorganize_var.get() else "disabled"
@@ -399,6 +470,9 @@ class SyncApp(ctk.CTk):
 
     def log_msg(self, msg):
         print(msg)
+        log = getattr(self, "session_log", None)
+        if log is not None:
+            log.append(msg)
         self.after(0, self._log_msg_ui, msg)
 
     def _log_msg_ui(self, msg):
@@ -448,13 +522,53 @@ class SyncApp(ctk.CTk):
         self.chk_fav.configure(state=state)
         self.chk_folders_last.configure(state=state)
         self.chk_recent.configure(state=state)
+        self.chk_eject.configure(state=state)
+        self.chk_dryrun.configure(state=state)
+        self.btn_cancel.configure(state="disabled" if enabled else "normal")
+
+    def show_error(self, title, msg):
+        self.after(0, lambda: messagebox.showerror(title, msg))
+
+    def show_info(self, title, msg):
+        self.after(0, lambda: messagebox.showinfo(title, msg))
+
+    def ask_okcancel(self, title, msg):
+        # Tk dialogs must run on the main thread; marshal and wait when called
+        # from the sync worker.
+        if threading.current_thread() is threading.main_thread():
+            return bool(messagebox.askokcancel(title, msg))
+        result = {}
+        done = threading.Event()
+        def _ask():
+            try:
+                result["value"] = messagebox.askokcancel(title, msg)
+            finally:
+                done.set()
+        self.after(0, _ask)
+        done.wait()
+        return bool(result.get("value"))
+
+    def cancel_sync(self):
+        self.cancel_event.set()
+        self.btn_cancel.configure(state="disabled")
+        self.log_msg("Cancelling sync after the current file...")
 
     def start_sync_thread(self):
         self.save_config()
         self.txt_log.configure(state="normal")
         self.txt_log.delete("0.0", "end")
         self.txt_log.configure(state="disabled")
-        threading.Thread(target=self.run_sync, daemon=True).start()
+        self.session_log.clear()
+        self.cancel_event.clear()
+        # Widget reads must happen on the main thread; capture values here and
+        # hand them to the worker.
+        params = {
+            "source": self.txt_source.get().strip(),
+            "hacks": self.txt_hacks.get().strip(),
+            "gbcsys": self.txt_gbcsys.get().strip(),
+            "dest": self.txt_dest.get().strip(),
+        }
+        threading.Thread(target=lambda: self.run_sync(**params), daemon=True).start()
         
     def copy_virtual_tree(self, node, current_dest, sd_catalog, folders_last, recent_sort):
         if not node.children: return
@@ -469,6 +583,7 @@ class SyncApp(ctk.CTk):
             sorted_child = sorted(node.children, key=lambda c: (c.is_folder != folder_sort_desc, c.name.lower()))
             
         for child in sorted_child:
+            check_cancel(self)
             target_name = child.name
             
             # Path Length Guard: Windows MAX_PATH is 260. 
@@ -499,8 +614,11 @@ class SyncApp(ctk.CTk):
                     raise ValueError(f"Path traversal detected: {target_path}")
 
                 if not os.path.exists(target_path):
-                    os.makedirs(target_path, exist_ok=True)
-                    self.log_msg(f"Created Folder: {target_name}")
+                    if getattr(self, "dry_run", False):
+                        self.log_msg(f"[DRY RUN] Would create folder: {target_name}")
+                    else:
+                        os.makedirs(target_path, exist_ok=True)
+                        self.log_msg(f"Created Folder: {target_name}")
                 self.copy_virtual_tree(child, target_path, sd_catalog, folders_last, recent_sort)
             else:
                 if not child.source_path:
@@ -519,48 +637,61 @@ class SyncApp(ctk.CTk):
                     raise ValueError(f"Path traversal detected: {target_path}")
 
                 source_stat = os.stat(child.source_path)
-                file_sig = (source_stat.st_size, int(source_stat.st_mtime), os.path.basename(child.source_path))
-                
+                dry_run = getattr(self, "dry_run", False)
+
                 # Check if already at destination
                 if os.path.exists(target_path):
                     dst_stat = os.stat(target_path)
-                    if dst_stat.st_size == source_stat.st_size and int(dst_stat.st_mtime) == int(source_stat.st_mtime):
-                        if file_sig in sd_catalog and target_path in sd_catalog[file_sig]:
-                            sd_catalog[file_sig].remove(target_path)
+                    if dst_stat.st_size == source_stat.st_size and mtimes_match(dst_stat.st_mtime, source_stat.st_mtime):
+                        catalog_discard_path(sd_catalog, source_stat.st_size, target_path)
+                        self.step_progress()
+                        continue
+                    if dry_run:
+                        self.log_msg(f" -> [DRY RUN] Would replace: {target_name}")
                         self.step_progress()
                         continue
                     os.remove(target_path)
 
-                # Check if exists elsewhere on SD for a quick move
-                if file_sig in sd_catalog and sd_catalog[file_sig]:
-                    existing_path = sd_catalog[file_sig].pop()
-                    self.log_msg(f" -> Moving (Local): {child.name}")
-                    shutil.move(existing_path, target_path)
+                # Check if exists elsewhere on SD for a quick move (size+mtime
+                # match, so it works even if the file was renamed on the SD)
+                existing_path = catalog_pop_match(sd_catalog, source_stat.st_size, source_stat.st_mtime)
+                if existing_path:
+                    if dry_run:
+                        self.log_msg(f" -> [DRY RUN] Would move (local): {child.name}")
+                    else:
+                        self.log_msg(f" -> Moving (Local): {child.name}")
+                        shutil.move(existing_path, target_path)
                     self.step_progress()
                     continue
-                    
-                self.log_msg(f" -> Copying: {child.name}")
-                shutil.copy2(child.source_path, target_path)
+
+                if dry_run:
+                    self.log_msg(f" -> [DRY RUN] Would copy: {child.name}")
+                else:
+                    self.log_msg(f" -> Copying: {child.name}")
+                    shutil.copy2(child.source_path, target_path)
                 self.step_progress()
 
     def backup_saves(self, source: str, hacks: str, dest: str, os_folder: str) -> None:
         self.log_msg("Backing up save files to PC...")
         # Choose best backup location: prefer source, fallback to hacks, skip if neither valid
         if source and os.path.isdir(source):
-            backup_dir = os.path.join(source, "Saves_Backup")
+            backup_root = os.path.join(source, "Saves_Backup")
         elif hacks and os.path.isdir(hacks):
-            backup_dir = os.path.join(hacks, "Saves_Backup")
+            backup_root = os.path.join(hacks, "Saves_Backup")
         else:
             self.log_msg("Warning: Cannot back up saves — no valid source folder found.")
             return
-        os.makedirs(backup_dir, exist_ok=True)
-        
+        dry_run = getattr(self, "dry_run", False)
+        # Timestamped snapshot so one bad sync can't clobber the only backup
+        backup_dir = os.path.join(backup_root, datetime.now().strftime("%Y-%m-%d_%H%M%S"))
+
         saves_found: List[str] = []
         for root, _, filenames in os.walk(dest):
+            check_cancel(self)
             if any(x in root.split(os.sep) for x in ["System Volume Information", "Saves_Backup"]):
                 continue
             for f in filenames:
-                if f.lower().endswith(('.sav', '.srm', '.rtc', '.fla', '.eep', '.sra')):
+                if os.path.splitext(f.lower())[1] in SAVE_EXTS:
                     src_file = os.path.join(root, f)
                     rel_path = f
                     root_parts_lower = [p.lower() for p in Path(root).parts]
@@ -568,23 +699,34 @@ class SyncApp(ctk.CTk):
                         idx = root_parts_lower.index(os_folder.lower())
                         actual_os_path = os.path.join(*Path(root).parts[:idx+1])
                         rel_path = os.path.relpath(src_file, actual_os_path)
-                    
-                    save_dest = os.path.join(backup_dir, rel_path)
-                    os.makedirs(os.path.dirname(save_dest), exist_ok=True)
-                    shutil.copy2(src_file, save_dest)
+
+                    if not dry_run:
+                        save_dest = os.path.join(backup_dir, rel_path)
+                        os.makedirs(os.path.dirname(save_dest), exist_ok=True)
+                        shutil.copy2(src_file, save_dest)
                     saves_found.append(src_file)
-        self.log_msg(f"Backed up {len(saves_found)} files.")
+        if dry_run:
+            self.log_msg(f"[DRY RUN] Would back up {len(saves_found)} files to {backup_dir}.")
+        else:
+            self.log_msg(f"Backed up {len(saves_found)} files to {os.path.basename(backup_dir)}.")
+            prune_backups(backup_root, keep=5, log=self.log_msg)
 
     def restore_saves(self, source: str, dest: str, os_folder: str) -> None:
-        backup_dir = os.path.join(source, "Saves_Backup")
-        if os.path.isdir(backup_dir):
-            self.log_msg("Restoring saves from PC to SD...")
+        backup_root = os.path.join(source, "Saves_Backup")
+        if os.path.isdir(backup_root):
+            # Restore from the newest timestamped snapshot; fall back to the
+            # legacy flat layout if no snapshots exist.
+            snapshots = list_backup_snapshots(backup_root)
+            backup_dir = os.path.join(backup_root, snapshots[-1]) if snapshots else backup_root
+            dry_run = getattr(self, "dry_run", False)
+            self.log_msg(f"Restoring saves from PC ({os.path.basename(backup_dir)}) to SD...")
             save_base = "SAVES" if os_folder.upper() == "GBOS" else "SAVE"
             rtc_base = "SAVES" if os_folder.upper() == "GBOS" else "RTC"
             restored_files: List[str] = []
             for root, _, filenames in os.walk(backup_dir):
+                check_cancel(self)
                 for f in filenames:
-                    if f.lower().endswith(('.sav', '.srm', '.rtc', '.fla', '.eep', '.sra')):
+                    if os.path.splitext(f.lower())[1] in SAVE_EXTS:
                         src_file = os.path.join(root, f)
                         rel_path = os.path.relpath(src_file, backup_dir)
                         path_parts = Path(rel_path).parts
@@ -598,13 +740,18 @@ class SyncApp(ctk.CTk):
                                 target_path = os.path.join(dest, os_folder, save_sub, f)
                         else:
                             target_path = os.path.join(dest, os_folder, rel_path)
-                        os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                        shutil.copy2(src_file, target_path)
+                        if dry_run:
+                            self.log_msg(f" -> [DRY RUN] Would restore: {f}")
+                        else:
+                            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                            shutil.copy2(src_file, target_path)
                         restored_files.append(target_path)
             self.log_msg(f"Restored {len(restored_files)} files.")
 
-    def catalog_sd(self, dest: str, rom_exts: set) -> Dict[Tuple[int, int, str], List[str]]:
-        catalog: Dict[Tuple[int, int, str], List[str]] = {}
+    def catalog_sd(self, dest: str, rom_exts: set) -> Dict[int, List[Tuple[int, str]]]:
+        """Catalog existing ROMs on the SD by size so identical files can be
+        moved locally instead of re-copied, even after a rename."""
+        catalog: Dict[int, List[Tuple[int, str]]] = {}
         if os.path.isdir(dest):
             self.log_msg("Cataloging SD card for quick moves...")
             for root, _, filenames in os.walk(dest):
@@ -615,8 +762,7 @@ class SyncApp(ctk.CTk):
                         f_path = os.path.join(root, f)
                         try:
                             f_stat = os.stat(f_path)
-                            sig = (int(f_stat.st_size), int(f_stat.st_mtime), str(f))
-                            catalog.setdefault(sig, []).append(f_path)
+                            catalog.setdefault(int(f_stat.st_size), []).append((int(f_stat.st_mtime), f_path))
                         except OSError:
                             continue
         return catalog
@@ -631,7 +777,9 @@ class SyncApp(ctk.CTk):
                 continue
             full = os.path.join(dest, item)
             try:
-                if os.path.isdir(full):
+                if getattr(self, "dry_run", False):
+                    self.log_msg(f"[DRY RUN] Would remove: {item}")
+                elif os.path.isdir(full):
                     shutil.rmtree(full)
                 else:
                     os.remove(full)
@@ -674,14 +822,20 @@ class SyncApp(ctk.CTk):
                                         new_f_name = matched + f_ext
                                         new_f_path = os.path.join(item_path, new_f_name)
                                         if not os.path.exists(new_f_path):
-                                            os.rename(f_path, new_f_path)
+                                            if getattr(self, "dry_run", False):
+                                                self.log_msg(f" -> [DRY RUN] Would rename: {f} -> {new_f_name}")
+                                            else:
+                                                os.rename(f_path, new_f_path)
                             
                             # Rename the folder itself
                             if item != new_folder_name:
                                 new_folder_path = os.path.join(gamedata_path, new_folder_name)
                                 if not os.path.exists(new_folder_path):
-                                    self.log_msg(f" -> Renaming GBA PRO folder: {item} -> {new_folder_name}")
-                                    os.rename(item_path, new_folder_path)
+                                    if getattr(self, "dry_run", False):
+                                        self.log_msg(f" -> [DRY RUN] Would rename GBA PRO folder: {item} -> {new_folder_name}")
+                                    else:
+                                        self.log_msg(f" -> Renaming GBA PRO folder: {item} -> {new_folder_name}")
+                                        os.rename(item_path, new_folder_path)
         else:
             sys_paths = [
                 (os.path.join(dest, os_folder, save_base), False),
@@ -717,15 +871,21 @@ class SyncApp(ctk.CTk):
                     if f != new_name:
                         new_full = os.path.join(sp, new_name)
                         if not os.path.exists(new_full):
-                            self.log_msg(f" -> Renaming SD save: {f} -> {new_name}")
-                            os.rename(full, new_full)
+                            if getattr(self, "dry_run", False):
+                                self.log_msg(f" -> [DRY RUN] Would rename SD save: {f} -> {new_name}")
+                            else:
+                                self.log_msg(f" -> Renaming SD save: {f} -> {new_name}")
+                                os.rename(full, new_full)
                         else:
                             self.log_msg(f"Warning: Could not rename '{f}' to '{new_name}' because destination already exists.")
 
     def _mirror_copy(self, src: str, dest: str) -> None:
         """Recursively mirror-copy src to dest, skipping files that match by size+mtime."""
-        os.makedirs(dest, exist_ok=True)
+        dry_run = getattr(self, "dry_run", False)
+        if not dry_run:
+            os.makedirs(dest, exist_ok=True)
         for item in os.listdir(src):
+            check_cancel(self)
             s = os.path.join(src, item)
             d = os.path.join(dest, item)
             if os.path.isdir(s):
@@ -734,11 +894,14 @@ class SyncApp(ctk.CTk):
                 if os.path.exists(d):
                     s_stat = os.stat(s)
                     d_stat = os.stat(d)
-                    if s_stat.st_size == d_stat.st_size and int(s_stat.st_mtime) == int(d_stat.st_mtime):
+                    if s_stat.st_size == d_stat.st_size and mtimes_match(s_stat.st_mtime, d_stat.st_mtime):
                         self.step_progress()
                         continue
-                self.log_msg(f" -> Copying: {item}")
-                shutil.copy2(s, d)
+                if dry_run:
+                    self.log_msg(f" -> [DRY RUN] Would copy: {item}")
+                else:
+                    self.log_msg(f" -> Copying: {item}")
+                    shutil.copy2(s, d)
                 self.step_progress()
 
     def mac_cleanup(self, path):
@@ -748,37 +911,42 @@ class SyncApp(ctk.CTk):
             except (FileNotFoundError, OSError):
                 pass
 
-    def run_sync(self):
-        source = self.txt_source.get().strip()
-        hacks = self.txt_hacks.get().strip()
-        gbcsys = self.txt_gbcsys.get().strip()
-        dest = self.txt_dest.get().strip()
-        
+    def run_sync(self, source=None, hacks=None, gbcsys=None, dest=None):
+        # Values are passed in by start_sync_thread (read on the main thread);
+        # fall back to widget reads for direct callers.
+        if source is None: source = self.txt_source.get().strip()
+        if hacks is None: hacks = self.txt_hacks.get().strip()
+        if gbcsys is None: gbcsys = self.txt_gbcsys.get().strip()
+        if dest is None: dest = self.txt_dest.get().strip()
+
+        dryrun_var = getattr(self, "chk_dryrun_var", None)
+        self.dry_run = bool(dryrun_var.get()) if dryrun_var else False
+
         if not source and not hacks:
-            self.after(0, lambda: messagebox.showerror("Error", "Source path required."))
+            self.show_error("Error", "Source path required.")
             return
         if not dest or not os.path.isdir(dest):
-            self.after(0, lambda: messagebox.showerror("Error", "Invalid Dest path."))
+            self.show_error("Error", "Invalid Dest path.")
             return
-        if source == dest or hacks == dest:
-            self.after(0, lambda: messagebox.showerror("Error", "Source and Dest cannot match."))
+        real_dest = os.path.realpath(dest)
+        if (source and os.path.realpath(source) == real_dest) or (hacks and os.path.realpath(hacks) == real_dest):
+            self.show_error("Error", "Source and Dest cannot match.")
             return
-            
+
         sys_drive = os.path.splitdrive(os.environ.get('SystemRoot', 'C:'))[0] if platform.system() == "Windows" else ""
         if platform.system() == "Windows" and os.path.splitdrive(dest)[0] == sys_drive:
-            if not messagebox.askokcancel("WARNING", f"Dest is System Drive ({sys_drive}). Proceed?"):
+            if not self.ask_okcancel("WARNING", f"Dest is System Drive ({sys_drive}). Proceed?"):
                 return
-        
+
         if platform.system() != "Windows":
-            real_dest = os.path.realpath(dest)
             dangerous = ["/", str(Path.home())]
             if real_dest in dangerous:
-                if not messagebox.askokcancel("WARNING", f"Dest '{dest}' looks like a system path. Proceed?"):
+                if not self.ask_okcancel("WARNING", f"Dest '{dest}' looks like a system path. Proceed?"):
                     return
-                
+
         has_os = any(os.path.exists(os.path.join(dest, d)) for d in ["EDGB", "GBOS", "GBCSYS", "ED64", "GBASYS", "EDGBA"])
         if not has_os:
-            self.after(0, lambda: messagebox.showerror("Error", "Missing OS folder on SD."))
+            self.show_error("Error", "Missing OS folder on SD.")
             return
             
         os_folder = "EDGB"
@@ -807,9 +975,12 @@ class SyncApp(ctk.CTk):
         
         self.after(0, lambda: self.toggle_ui(False))
         try:
-            self.log_msg("Starting Python Sync...")
+            if self.dry_run:
+                self.log_msg("Starting DRY RUN — no changes will be made...")
+            else:
+                self.log_msg("Starting Python Sync...")
             self.prog_max = 1
-            self.progress_bar.set(0)
+            self.after(0, lambda: self.progress_bar.set(0))
             
             temp_unzip_dir = None
             temp_sd_dir = None
@@ -833,26 +1004,27 @@ class SyncApp(ctk.CTk):
             sd_catalog = self.catalog_sd(dest, rom_exts)
 
             # --- Move cataloged files to a temporary location on SD card before cleaning --- #
-            if self.chk_reorganize_var.get() and sd_catalog:
+            if self.chk_reorganize_var.get() and sd_catalog and not self.dry_run:
                 temp_sd_dir = os.path.join(dest, ".sync_temp")
                 os.makedirs(temp_sd_dir, exist_ok=True)
-                updated_catalog = {}
+                updated_catalog: Dict[int, List[Tuple[int, str]]] = {}
                 file_counter = 0
-                for sig, paths in sd_catalog.items():
-                    new_paths = []
-                    for path in paths:
+                for size, entries in sd_catalog.items():
+                    check_cancel(self)
+                    new_entries = []
+                    for mtime, path in entries:
                         if os.path.exists(path):
                             ext = os.path.splitext(path)[1]
                             temp_file_name = f"temp_{file_counter}{ext}"
                             temp_file_path = os.path.join(temp_sd_dir, temp_file_name)
                             try:
                                 shutil.move(path, temp_file_path)
-                                new_paths.append(temp_file_path)
+                                new_entries.append((mtime, temp_file_path))
                                 file_counter += 1
                             except OSError as e:
                                 self.log_msg(f"Warning: Could not move {path} to temp SD location: {e}")
-                    if new_paths:
-                        updated_catalog[sig] = new_paths
+                    if new_entries:
+                        updated_catalog[size] = new_entries
                 sd_catalog = updated_catalog
 
             # --- SD Cleaning (Soft Format) --- #
@@ -866,6 +1038,7 @@ class SyncApp(ctk.CTk):
                     temp_unzip_dir = tempfile.mkdtemp(prefix="EverDrive_")
                     self.log_msg(f"Extracting {len(zip_files)} zip files to temp directory...")
                     for zf in zip_files:
+                        check_cancel(self)
                         try:
                             with zipfile.ZipFile(zf, 'r') as zip_ref:
                                 for member in zip_ref.namelist():
@@ -1066,13 +1239,17 @@ class SyncApp(ctk.CTk):
                             for sub in os.listdir(sp):
                                 sub_path = os.path.join(sp, sub)
                                 if os.path.isdir(sub_path):
-                                    self.log_msg(f" -> Removing invalid save subdirectory: {sub}")
-                                    shutil.rmtree(sub_path, ignore_errors=True)
+                                    if self.dry_run:
+                                        self.log_msg(f" -> [DRY RUN] Would remove invalid save subdirectory: {sub}")
+                                    else:
+                                        self.log_msg(f" -> Removing invalid save subdirectory: {sub}")
+                                        shutil.rmtree(sub_path, ignore_errors=True)
 
                 if hacks and os.path.isdir(hacks):
                     self.log_msg("Syncing ROM Hacks into '[ROM Hacks]' folder...")
                     hacks_dest = os.path.join(dest, "[ROM Hacks]")
-                    os.makedirs(hacks_dest, exist_ok=True)
+                    if not self.dry_run:
+                        os.makedirs(hacks_dest, exist_ok=True)
 
                     # Apply 1G1R + series grouping to hacks even in bypass mode
                     bypass_hack_roms = [
@@ -1097,8 +1274,11 @@ class SyncApp(ctk.CTk):
                         target_dir = hacks_dest
                         for part in dest_parts:
                             target_dir = os.path.join(target_dir, part)
-                        os.makedirs(target_dir, exist_ok=True)
-                        shutil.copy2(str(f), os.path.join(target_dir, clean_name + f.suffix))
+                        if self.dry_run:
+                            self.log_msg(f" -> [DRY RUN] Would copy hack: {clean_name + f.suffix}")
+                        else:
+                            os.makedirs(target_dir, exist_ok=True)
+                            shutil.copy2(str(f), os.path.join(target_dir, clean_name + f.suffix))
                         bypass_rom_name_map[get_fuzzy_title(f.stem)] = clean_name
                         self.step_progress()
 
@@ -1113,41 +1293,229 @@ class SyncApp(ctk.CTk):
                                 save_sub_dir = os.path.join(dest, os_folder, "gamedata", rom_folder_name)
                             else:
                                 save_sub_dir = os.path.join(dest, os_folder, rtc_base if p.suffix.lower() == ".rtc" else save_base)
-                            os.makedirs(save_sub_dir, exist_ok=True)
-                            shutil.copy2(str(p), os.path.join(save_sub_dir, final_sav_name))
+                            if self.dry_run:
+                                self.log_msg(f" -> [DRY RUN] Would place save: {final_sav_name}")
+                            else:
+                                os.makedirs(save_sub_dir, exist_ok=True)
+                                shutil.copy2(str(p), os.path.join(save_sub_dir, final_sav_name))
 
             # --- GBCSYS Payload --- #
             if gbcsys and os.path.isdir(gbcsys):
                 self.log_msg("Copying GBCSYS/GBOS payload files...")
                 target_os_dir = os.path.join(dest, os_folder)
-                os.makedirs(target_os_dir, exist_ok=True)
+                if not self.dry_run:
+                    os.makedirs(target_os_dir, exist_ok=True)
                 for root, _, filenames in os.walk(gbcsys):
+                    check_cancel(self)
                     for f in filenames:
                         src_file = os.path.join(root, f)
                         rel_path = os.path.relpath(src_file, gbcsys)
                         target_path = os.path.join(target_os_dir, rel_path)
-                        os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                        shutil.copy2(src_file, target_path)
+                        if self.dry_run:
+                            self.log_msg(f" -> [DRY RUN] Would copy payload: {rel_path}")
+                        else:
+                            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                            shutil.copy2(src_file, target_path)
 
             # --- Save Restore --- #
-            if self.chk_restore_var.get() and source:
-                self.restore_saves(source, dest, os_folder)
+            if self.chk_restore_var.get():
+                # Like backup, fall back to the hacks folder when no source is set
+                restore_base = source if (source and os.path.isdir(source)) else hacks
+                if restore_base and os.path.isdir(restore_base):
+                    self.restore_saves(restore_base, dest, os_folder)
 
-            self.mac_cleanup(dest)
-            self.log_msg("Sync Complete!")
-            self.after(0, lambda: messagebox.showinfo("Success", "Sync complete! Safely eject your SD card."))
+            if not self.dry_run:
+                self.mac_cleanup(dest)
 
+            if self.dry_run:
+                self.log_msg("Dry run complete — no changes were made.")
+                self.show_info("Dry Run", "Dry run complete! Check the log for planned changes.")
+            else:
+                self.log_msg("Sync Complete!")
+                ejected = False
+                eject_var = getattr(self, "chk_eject_var", None)
+                if eject_var and eject_var.get():
+                    ejected = self.eject_sd(dest)
+                if ejected:
+                    self.show_info("Success", "Sync complete! SD card ejected — safe to remove.")
+                else:
+                    self.show_info("Success", "Sync complete! Safely eject your SD card.")
+
+        except SyncCancelled:
+            self.log_msg("Sync cancelled by user.")
+            self.show_info("Cancelled", "Sync was cancelled. The SD card may be in a partial state — run a sync again to finish.")
         except Exception as e:
             self.log_msg(f"ERROR: {str(e)}")
-            self.after(0, lambda: messagebox.showerror("Error", str(e)))
+            self.show_error("Error", str(e))
         finally:
             if temp_unzip_dir and os.path.exists(temp_unzip_dir):
                 shutil.rmtree(temp_unzip_dir)
             if temp_sd_dir and os.path.exists(temp_sd_dir):
                 shutil.rmtree(temp_sd_dir, ignore_errors=True)
+            self._write_sync_report(source, hacks)
             self.after(0, lambda: self.toggle_ui(True))
-            self.progress_bar.set(0)
+            self.after(0, lambda: self.progress_bar.set(0))
+
+    def _write_sync_report(self, source, hacks):
+        """Persist the session log next to the save backups for post-sync auditing."""
+        lines = getattr(self, "session_log", None)
+        if not lines:
+            return
+        base = source if (source and os.path.isdir(source)) else (hacks if hacks and os.path.isdir(hacks) else None)
+        if not base:
+            return
+        backup_root = os.path.join(base, "Saves_Backup")
+        try:
+            os.makedirs(backup_root, exist_ok=True)
+            with open(os.path.join(backup_root, "last_sync.log"), "w", encoding="utf-8") as f:
+                f.write(f"EverDrive Sync report — {datetime.now().isoformat(timespec='seconds')}\n\n")
+                f.write("\n".join(lines) + "\n")
+        except OSError:
+            pass
+
+    def eject_sd(self, dest) -> bool:
+        sysname = platform.system()
+        try:
+            if sysname == "Darwin":
+                real = os.path.realpath(dest)
+                if real.startswith("/Volumes/") and len(real.split("/")) > 2:
+                    volume = "/Volumes/" + real.split("/")[2]
+                    self.log_msg(f"Ejecting {volume}...")
+                    result = subprocess.run(["diskutil", "eject", volume],
+                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    if result.returncode == 0:
+                        self.log_msg("SD card ejected.")
+                        return True
+                self.log_msg("Warning: Could not eject automatically — eject manually.")
+            elif sysname == "Linux":
+                subprocess.run(["sync"])
+                self.log_msg("Filesystem buffers flushed — unmount/eject the card manually.")
+            else:
+                self.log_msg("Auto-eject is not supported on this platform — eject manually.")
+        except (OSError, FileNotFoundError):
+            self.log_msg("Warning: Eject failed — eject manually.")
+        return False
+
+class _StaticVar:
+    def __init__(self, value):
+        self._value = value
+    def get(self):
+        return self._value
+
+class _StaticEntry:
+    def __init__(self, value=""):
+        self._value = value
+    def get(self):
+        return self._value
+
+class _NullProgress:
+    def set(self, *_):
+        pass
+    def get(self):
+        return 0.0
+
+class HeadlessApp(SyncApp):
+    """Runs the sync engine without a Tk window for CLI usage."""
+
+    def __init__(self, args):
+        # Deliberately skip SyncApp/CTk __init__ — no window in CLI mode
+        self.session_log: List[str] = []
+        self.cancel_event = threading.Event()
+        self.prog_max = 1
+        self.assume_yes = args.yes
+        self.had_error = False
+        self.config_data = {
+            "Source": args.source, "Hacks": args.hacks,
+            "GbcSysPayload": args.gbcsys, "Dest": args.dest
+        }
+        self.txt_source = _StaticEntry(args.source)
+        self.txt_hacks = _StaticEntry(args.hacks)
+        self.txt_gbcsys = _StaticEntry(args.gbcsys)
+        self.txt_dest = _StaticEntry(args.dest)
+        self.chk_backups_var = _StaticVar(not args.no_backup)
+        self.chk_restore_var = _StaticVar(args.restore)
+        self.chk_zip_var = _StaticVar(args.zip)
+        self.chk_fav_var = _StaticVar(args.favorites)
+        self.chk_reorganize_var = _StaticVar(not args.no_reorganize)
+        self.chk_1g1r_var = _StaticVar(args.one_g_one_r)
+        self.chk_usa_var = _StaticVar(True)
+        self.chk_world_var = _StaticVar(True)
+        self.chk_eur_var = _StaticVar(True)
+        self.chk_jpn_var = _StaticVar(True)
+        self.chk_series_var = _StaticVar(not args.no_series)
+        self.chk_type_var = _StaticVar(not args.no_type_folders)
+        self.chk_az_var = _StaticVar(not args.no_az)
+        self.chk_tags_var = _StaticVar(not args.no_tags)
+        self.chk_folders_last_var = _StaticVar(args.folders_last)
+        self.chk_recent_var = _StaticVar(args.recent)
+        self.chk_dryrun_var = _StaticVar(args.dry_run)
+        self.chk_eject_var = _StaticVar(args.eject)
+        self.progress_bar = _NullProgress()
+
+    def log_msg(self, msg):
+        print(msg)
+        self.session_log.append(msg)
+
+    def after(self, ms, func=None, *args):
+        if func:
+            func(*args)
+
+    def update_idletasks(self):
+        pass
+
+    def update(self):
+        pass
+
+    def toggle_ui(self, enabled):
+        pass
+
+    def show_error(self, title, msg):
+        self.had_error = True
+        print(f"{title}: {msg}", file=sys.stderr)
+
+    def show_info(self, title, msg):
+        print(f"{title}: {msg}")
+
+    def ask_okcancel(self, title, msg):
+        if self.assume_yes:
+            print(f"{title}: {msg} (auto-confirmed by --yes)")
+            return True
+        try:
+            return input(f"{title}: {msg} [y/N]: ").strip().lower().startswith("y")
+        except EOFError:
+            return False
+
+def run_cli(argv=None):
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="sync_everdrive",
+        description="Sync ROMs to an EverDrive SD card (headless mode). Run without arguments to launch the GUI.")
+    parser.add_argument("--source", default="", help="ROM library folder")
+    parser.add_argument("--dest", required=True, help="SD card root")
+    parser.add_argument("--hacks", default="", help="ROM hacks folder")
+    parser.add_argument("--gbcsys", default="", help="GBCSYS/OS payload folder")
+    parser.add_argument("--no-reorganize", action="store_true", help="mirror-copy instead of reorganizing")
+    parser.add_argument("--no-type-folders", action="store_true", help="don't separate GB/GBC/GBA/N64 folders")
+    parser.add_argument("--no-series", action="store_true", help="don't auto-create series folders")
+    parser.add_argument("--no-az", action="store_true", help="don't create A-Z folders")
+    parser.add_argument("--no-tags", action="store_true", help="strip region/revision tags from names")
+    parser.add_argument("--no-backup", action="store_true", help="skip backing up SD saves to PC")
+    parser.add_argument("--restore", action="store_true", help="restore saves from PC to SD")
+    parser.add_argument("--zip", action="store_true", help="extract ROMs from zip files")
+    parser.add_argument("--1g1r", dest="one_g_one_r", action="store_true", help="keep one game per region group")
+    parser.add_argument("--favorites", action="store_true", help="push favorites.txt titles to top")
+    parser.add_argument("--folders-last", action="store_true", help="sort folders after games")
+    parser.add_argument("--recent", action="store_true", help="sort hacks by date")
+    parser.add_argument("--dry-run", action="store_true", help="preview changes without writing")
+    parser.add_argument("--eject", action="store_true", help="eject the SD card after a successful sync")
+    parser.add_argument("--yes", "-y", action="store_true", help="answer yes to confirmation prompts")
+    args = parser.parse_args(argv)
+    app = HeadlessApp(args)
+    app.run_sync()
+    return 1 if app.had_error else 0
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        sys.exit(run_cli())
     app = SyncApp()
     app.mainloop()

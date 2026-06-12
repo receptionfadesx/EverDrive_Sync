@@ -1,14 +1,31 @@
 import pytest # type: ignore
 import os
+import shutil
+import threading
 from pathlib import Path
 from sync_everdrive import (
-    get_clean_rom_name, 
-    get_fuzzy_title, 
-    get_best_region_games, 
-    get_series_groups, 
-    VirtualNode, 
-    add_to_virtual_tree
+    get_clean_rom_name,
+    get_fuzzy_title,
+    get_best_region_games,
+    get_series_groups,
+    VirtualNode,
+    add_to_virtual_tree,
+    SyncCancelled,
+    check_cancel,
+    mtimes_match,
+    catalog_pop_match,
+    catalog_discard_path,
+    list_backup_snapshots,
+    prune_backups,
+    run_cli
 ) # type: ignore
+
+def latest_backup_dir(base):
+    """Return the newest timestamped snapshot under base/Saves_Backup."""
+    root = Path(base) / "Saves_Backup"
+    snaps = sorted(d for d in root.iterdir() if d.is_dir())
+    assert snaps, f"no backup snapshots in {root}"
+    return snaps[-1]
 
 def test_get_clean_rom_name():
     assert get_clean_rom_name("Pokemon - Red Version (USA, Europe)") == "Pokemon - Red Version"
@@ -128,9 +145,10 @@ class DummyApp:
 from sync_everdrive import SyncApp
 
 class MockSyncApp(SyncApp):
-    def __init__(self, source="", dest="", hacks="", gbcsys="", backups=False, zip=False, fav=False, reorg=True, usa=True, world=True, eur=True, jpn=True, series=False, type_folders=True, az=False, tags=True, restore=False, folders_last=False, recent=False):
+    def __init__(self, source="", dest="", hacks="", gbcsys="", backups=False, zip=False, fav=False, reorg=True, usa=True, world=True, eur=True, jpn=True, series=False, type_folders=True, az=False, tags=True, restore=False, folders_last=False, recent=False, dryrun=False, eject=False):
         self.logs = []
         self.prog_max = 1
+        self.cancel_event = threading.Event()
         self.config_data = {
             "Source": str(source), "Hacks": str(hacks), "GbcSysPayload": str(gbcsys), "Dest": str(dest)
         }
@@ -155,7 +173,9 @@ class MockSyncApp(SyncApp):
         self.chk_restore_var = type('MockVar', (), {'get': lambda *a: restore})()
         self.chk_folders_last_var = type('MockVar', (), {'get': lambda *a: folders_last})()
         self.chk_recent_var = type('MockVar', (), {'get': lambda *a: recent})()
-        
+        self.chk_dryrun_var = type('MockVar', (), {'get': lambda *a: dryrun})()
+        self.chk_eject_var = type('MockVar', (), {'get': lambda *a: eject})()
+
         self.progress_bar = type('MockProgress', (), {'set': lambda *a: None, 'get': lambda *a: 0.0})()
         
     def log_msg(self, msg):
@@ -191,24 +211,26 @@ def test_backup_restore_case_insensitivity(tmp_path):
     
     from sync_everdrive import SyncApp
     SyncApp.backup_saves(app, str(source), "", str(dest), "EDGB")
-    
-    backup_file = source / "Saves_Backup" / "SAVE" / "Game1.sav"
+
+    backup_file = latest_backup_dir(source) / "SAVE" / "Game1.sav"
     assert backup_file.exists()
     assert backup_file.read_text() == "my save data"
-    
+
     save_file.unlink()
     assert not save_file.exists()
-    
+
     SyncApp.restore_saves(app, str(source), str(dest), "edgb")
     assert save_file.exists()
     assert save_file.read_text() == "my save data"
-    
+
     save_file.unlink()
-    backup_file.unlink()
-    
+
+    # Legacy flat layout (no timestamped snapshots) must still restore
+    shutil.rmtree(source / "Saves_Backup")
+    (source / "Saves_Backup").mkdir()
     flat_backup = source / "Saves_Backup" / "Game1.sav"
     flat_backup.write_text("flat save data")
-    
+
     SyncApp.restore_saves(app, str(source), str(dest), "edgb")
     assert save_file.exists()
     assert save_file.read_text() == "flat save data"
@@ -230,15 +252,23 @@ def test_n64_sync_reorganize(tmp_path):
     (save_dir / "Mario64.sra").write_text("sram data")
     
     SyncApp.backup_saves(app, str(source), "", str(dest), "ed64")
-    assert (source / "Saves_Backup" / "SAVE" / "Zelda64.eep").exists()
-    assert (source / "Saves_Backup" / "SAVE" / "Mario64.sra").exists()
-    
+    snap = latest_backup_dir(source)
+    assert (snap / "SAVE" / "Zelda64.eep").exists()
+    assert (snap / "SAVE" / "Mario64.sra").exists()
+
     (save_dir / "Zelda64.eep").unlink()
-    (source / "Saves_Backup" / "SAVE" / "Zelda64.eep").unlink()
-    (source / "Saves_Backup" / "Zelda64.eep").write_text("flat eeprom data")
-    
+
     SyncApp.restore_saves(app, str(source), str(dest), "ed64")
     assert (dest / "ed64" / "SAVE" / "Zelda64.eep").exists()
+    assert (dest / "ed64" / "SAVE" / "Zelda64.eep").read_text() == "eeprom data"
+
+    # Legacy flat layout restore
+    (dest / "ed64" / "SAVE" / "Zelda64.eep").unlink()
+    shutil.rmtree(source / "Saves_Backup")
+    (source / "Saves_Backup").mkdir()
+    (source / "Saves_Backup" / "Zelda64.eep").write_text("flat eeprom data")
+
+    SyncApp.restore_saves(app, str(source), str(dest), "ed64")
     assert (dest / "ed64" / "SAVE" / "Zelda64.eep").read_text() == "flat eeprom data"
 
 def test_gba_sync_reorganize(tmp_path):
@@ -257,7 +287,7 @@ def test_gba_sync_reorganize(tmp_path):
     (save_dir / "Pokemon.sav").write_text("gba save")
     
     SyncApp.backup_saves(app, str(source), "", str(dest), "GBASYS")
-    assert (source / "Saves_Backup" / "SAVE" / "Pokemon.sav").exists()
+    assert (latest_backup_dir(source) / "SAVE" / "Pokemon.sav").exists()
 
 def test_gba_pro_sync_reorganize(tmp_path):
     source = tmp_path / "source"
@@ -275,9 +305,10 @@ def test_gba_pro_sync_reorganize(tmp_path):
     (save_dir / "Metroid.sav").write_text("pro save data")
     
     SyncApp.backup_saves(app, str(source), "", str(dest), "edgba")
-    assert (source / "Saves_Backup" / "gamedata" / "Metroid.gba" / "Metroid.sav").exists()
-    
-    (source / "Saves_Backup" / "gamedata" / "Metroid.gba" / "Metroid.sav").unlink()
+    assert (latest_backup_dir(source) / "gamedata" / "Metroid.gba" / "Metroid.sav").exists()
+
+    shutil.rmtree(source / "Saves_Backup")
+    (source / "Saves_Backup").mkdir()
     (source / "Saves_Backup" / "Metroid.sav").write_text("flat pro data")
     (save_dir / "Metroid.sav").unlink()
     
@@ -603,3 +634,207 @@ def test_mac_cleanup(tmp_path):
          patch('subprocess.run') as mock_run:
         app.mac_cleanup("/test/path")
         mock_run.assert_not_called()
+
+def test_mtimes_match_fat32_tolerance():
+    assert mtimes_match(1000, 1000)
+    assert mtimes_match(1000, 1002)  # FAT32 2-second resolution
+    assert mtimes_match(1002, 1000)
+    assert not mtimes_match(1000, 1003)
+
+def test_catalog_helpers():
+    catalog = {100: [(1000, "/sd/a.gb"), (2000, "/sd/b.gb")]}
+    # 2-second drift still matches
+    assert catalog_pop_match(catalog, 100, 1002) == "/sd/a.gb"
+    # already popped
+    assert catalog_pop_match(catalog, 100, 1001) is None
+    assert catalog_pop_match(catalog, 100, 1999) == "/sd/b.gb"
+    # unknown size
+    assert catalog_pop_match(catalog, 999, 1000) is None
+
+    catalog = {50: [(1, "/sd/x.gb"), (2, "/sd/y.gb")]}
+    catalog_discard_path(catalog, 50, "/sd/x.gb")
+    assert catalog[50] == [(2, "/sd/y.gb")]
+
+def test_check_cancel_raises():
+    app = MockSyncApp()
+    check_cancel(app)  # not cancelled: no error
+    app.cancel_event.set()
+    with pytest.raises(SyncCancelled):
+        check_cancel(app)
+    # Objects without a cancel_event are a no-op
+    check_cancel(DummyApp())
+
+def test_snap_files_backed_up(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+
+    save_dir = dest / "EDGB" / "SAVE"
+    save_dir.mkdir(parents=True)
+    (save_dir / "Game1.snap").write_text("snapshot data")
+
+    app = DummyApp()
+    from sync_everdrive import SyncApp
+    SyncApp.backup_saves(app, str(source), "", str(dest), "EDGB")
+    assert (latest_backup_dir(source) / "SAVE" / "Game1.snap").exists()
+
+def test_backup_falls_back_to_hacks(tmp_path):
+    hacks = tmp_path / "hacks"
+    dest = tmp_path / "sd_card"
+    hacks.mkdir()
+    dest.mkdir()
+
+    save_dir = dest / "EDGB" / "SAVE"
+    save_dir.mkdir(parents=True)
+    (save_dir / "Game1.sav").write_text("save data")
+
+    app = DummyApp()
+    from sync_everdrive import SyncApp
+    SyncApp.backup_saves(app, "", str(hacks), str(dest), "EDGB")
+    assert (latest_backup_dir(hacks) / "SAVE" / "Game1.sav").exists()
+
+def test_backup_snapshot_retention(tmp_path):
+    root = tmp_path / "Saves_Backup"
+    root.mkdir()
+    names = [f"2026-01-0{i}_000000" for i in range(1, 8)]
+    for n in names:
+        (root / n).mkdir()
+    (root / "not_a_snapshot").mkdir()
+
+    prune_backups(str(root), keep=5)
+
+    remaining = list_backup_snapshots(str(root))
+    assert remaining == names[2:]
+    assert (root / "not_a_snapshot").exists()
+
+def test_restore_uses_latest_snapshot(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+
+    old_snap = source / "Saves_Backup" / "2026-01-01_000000" / "SAVE"
+    new_snap = source / "Saves_Backup" / "2026-02-01_000000" / "SAVE"
+    old_snap.mkdir(parents=True)
+    new_snap.mkdir(parents=True)
+    (old_snap / "Game.sav").write_text("old save")
+    (new_snap / "Game.sav").write_text("new save")
+
+    app = DummyApp()
+    from sync_everdrive import SyncApp
+    SyncApp.restore_saves(app, str(source), str(dest), "EDGB")
+    assert (dest / "EDGB" / "SAVE" / "Game.sav").read_text() == "new save"
+
+def test_restore_falls_back_to_hacks(tmp_path):
+    hacks = tmp_path / "hacks"
+    dest = tmp_path / "sd_card"
+    hacks.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+
+    (hacks / "Some Hack.gbc").write_text("hack rom")
+    snap = hacks / "Saves_Backup" / "2026-01-01_000000" / "SAVE"
+    snap.mkdir(parents=True)
+    # Name with a tag: restore preserves it verbatim, hack save placement would not
+    (snap / "Pokemon - Red (USA).sav").write_text("restored save")
+
+    app = MockSyncApp(source="", hacks=str(hacks), dest=str(dest), restore=True)
+
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    assert (dest / "EDGB" / "SAVE" / "Pokemon - Red (USA).sav").read_text() == "restored save"
+
+def test_local_move_after_rename(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+
+    rom_src = source / "Bomberman Max - Blue Champion (USA).gbc"
+    rom_src.write_text("dummy rom data")
+
+    # Same content already on the SD but under a different (renamed) filename
+    old_dir = dest / "Old Stuff"
+    old_dir.mkdir()
+    rom_old = old_dir / "renamed_rom.gbc"
+    rom_old.write_text("dummy rom data")
+    stat_src = os.stat(rom_src)
+    os.utime(rom_old, (stat_src.st_atime, stat_src.st_mtime))
+
+    app = MockSyncApp(source=str(source), dest=str(dest))
+
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    new_rom_path = dest / "GBC" / "Bomberman Max - Blue Champion (USA).gbc"
+    assert new_rom_path.exists()
+    assert new_rom_path.read_text() == "dummy rom data"
+    assert any("Moving (Local)" in line for line in app.logs)
+
+def test_dry_run_makes_no_changes(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB" / "SAVE").mkdir(parents=True)
+    (dest / "EDGB" / "SAVE" / "Game1.sav").write_text("save data")
+
+    (source / "New Game.gbc").write_text("rom data")
+    stray = dest / "stray_file.txt"
+    stray.write_text("would normally be cleaned")
+
+    app = MockSyncApp(source=str(source), dest=str(dest), backups=True, dryrun=True)
+
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo') as mock_info, \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+        mock_info.assert_called_once()
+
+    # Nothing was written, deleted, or backed up
+    assert stray.exists()
+    assert not (dest / "GBC").exists()
+    assert not (source / "Saves_Backup").exists()
+    assert any("[DRY RUN]" in line or "DRY RUN" in line for line in app.logs)
+
+def test_cli_dry_run(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+    (source / "Game.gbc").write_text("rom data")
+
+    rc = run_cli(["--source", str(source), "--dest", str(dest),
+                  "--dry-run", "--no-backup", "--yes"])
+    assert rc == 0
+    assert not (dest / "GBC").exists()
+
+def test_cli_sync(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+    (source / "Game.gbc").write_text("rom data")
+
+    rc = run_cli(["--source", str(source), "--dest", str(dest),
+                  "--no-backup", "--no-az", "--yes"])
+    assert rc == 0
+    assert (dest / "GBC" / "Game.gbc").read_text() == "rom data"
+    # Sync report is written next to the backups
+    assert (source / "Saves_Backup" / "last_sync.log").exists()
