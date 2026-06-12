@@ -37,10 +37,16 @@ EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alpha
 - **Integrated `.zip` Extraction**: Can seamlessly extract `.gb` or `.gbc` ROMs directly from `.zip` archives during the sync process.
 - **Dedicated ROM Hacks Support**: Treat ROM hacks as first-class citizens. Keeps them properly sorted with their own saves without clashing with base games.
 - **Save File & RTC Management**:
-  - Automatically backs up `.sav`, `.srm`, `.rtc`, `.fla`, and `.snap` files from your SD card to your PC before making drastic changes. Perfectly preserves original extensions.
+  - Automatically backs up `.sav`, `.srm`, `.rtc`, `.fla`, `.eep`, `.sra`, and `.snap` files from your SD card to your PC before making drastic changes. Perfectly preserves original extensions.
+  - **Timestamped backup snapshots**: Each sync creates a new dated snapshot under `Saves_Backup/` (the 5 most recent are kept), so a single bad sync can never destroy your only backup. Restores always use the newest snapshot.
   - Restores saves perfectly, matching them to dynamically renamed ROMs.
   - Routes save files into the correct hardware directory (e.g., `GBCSYS/SAVE`, `EDGB/SAVE`, `ED64/SAVE`, or GBA Pro's nested `edgba/gamedata` structure).
   - **Auto-renames existing saves on the SD card** to guarantee they match new ROM naming conventions (with safety guards protecting titles like *"Save the World"* or *"GBA Explorer"* from incorrect prefix stripping).
+- **Dry Run Mode**: Preview exactly what a sync would copy, move, rename, or delete — without touching a single file. Perfect for a first run on a new SD card.
+- **Cancel Button**: Safely stop a running sync after the current file finishes, instead of yanking the card mid-write.
+- **Headless CLI Mode**: Run syncs from the command line or scripts — `python sync_everdrive.py --source ~/ROMs --dest /Volumes/EVERDRIVE --yes` (see `--help` for all options, including `--dry-run`).
+- **Auto-Eject**: Optionally eject the SD card automatically after a successful sync (macOS).
+- **Sync Reports**: Every sync writes its full log to `Saves_Backup/last_sync.log` so you can audit what was changed afterwards.
 
 ### 🌟 1:1 PowerShell Legacy Parity
 The Python logic engine has undergone a massive audit and is now **100% feature complete and 1:1 with the original advanced PowerShell script**. This includes edge cases like:
@@ -84,6 +90,20 @@ Alternatively, if you prefer to run the script via Python directly:
 1. Ensure you have Python installed.
 2. Install the required packages: `pip install -r requirements.txt`
 3. Run the script: `python sync_everdrive.py`
+
+### Headless / CLI usage
+
+Passing any argument skips the GUI and runs the sync directly — useful for scripting:
+
+```bash
+# Preview what a sync would do, without changing anything
+python sync_everdrive.py --source ~/ROMs --dest /Volumes/EVERDRIVE --dry-run --yes
+
+# Full sync, then eject the card
+python sync_everdrive.py --source ~/ROMs --dest /Volumes/EVERDRIVE --eject --yes
+```
+
+Run `python sync_everdrive.py --help` for the full list of options (every GUI checkbox has a CLI flag).
 
 ## Legacy PowerShell version
 The original PowerShell `.ps1` script is still available in the `legacy_cli/` directory for Windows power users who prefer it.
