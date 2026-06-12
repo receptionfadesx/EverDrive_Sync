@@ -649,7 +649,7 @@ class SyncApp(ctk.CTk):
                     item_path = os.path.join(gamedata_path, item)
                     if os.path.isdir(item_path) and item.lower().endswith(".gba"):
                         stem = os.path.splitext(item)[0]
-                        clean_stem = str(re.sub(r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_*', '', stem))
+                        clean_stem = str(re.sub(r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_+', '', stem))
                         if not clean_stem:
                             continue
                         fuzzy = get_fuzzy_title(clean_stem)
@@ -696,7 +696,7 @@ class SyncApp(ctk.CTk):
                     if not os.path.isfile(full):
                         continue
                     stem, ext = os.path.splitext(f)
-                    clean_stem: str = str(re.sub(r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_*', '', stem))
+                    clean_stem: str = str(re.sub(r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_+', '', stem))
                     if not clean_stem:
                         continue
                     fuzzy = get_fuzzy_title(clean_stem)
@@ -985,7 +985,7 @@ class SyncApp(ctk.CTk):
 
                 for s in all_saves:
                     final_ext = s.suffix
-                    clean_base: str = str(re.sub(r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_*', '', s.stem))
+                    clean_base: str = str(re.sub(r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_+', '', s.stem))
                     if not clean_base:
                         continue
                     fuzzy = get_fuzzy_title(clean_base)
@@ -1074,7 +1074,7 @@ class SyncApp(ctk.CTk):
                     # Fuzzy-match and place .sav files from hacks into OS save folders
                     for p in Path(hacks).rglob("*"):
                         if p.is_file() and p.suffix.lower() in save_exts:
-                            clean_sav: str = str(re.sub(r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_*', '', p.stem))
+                            clean_sav: str = str(re.sub(r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_+', '', p.stem))
                             matched_sav = bypass_rom_name_map.get(get_fuzzy_title(clean_sav))
                             final_sav_name = (matched_sav if matched_sav else get_clean_rom_name(clean_sav)) + p.suffix
                             if os_folder.lower() == "edgba":
