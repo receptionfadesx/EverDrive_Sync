@@ -17,9 +17,6 @@ concurrency:
 permissions:
   contents: write  # Required to create GitHub Releases and upload assets
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build:
     name: Build on ${{ matrix.os }}
@@ -39,10 +36,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -76,7 +73,7 @@ jobs:
         run: zip -r ${{ matrix.artifact_name }}.zip ${{ matrix.dist_path }}
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ${{ matrix.artifact_name }}.zip
           generate_release_notes: true
