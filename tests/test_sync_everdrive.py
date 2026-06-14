@@ -553,7 +553,7 @@ def test_load_save_config(tmp_path):
     config_file = tmp_path / "config.json"
     
     from unittest.mock import patch
-    with patch('sync_everdrive.CONFIG_FILE', str(config_file)):
+    with patch('everdrive.sync_app.CONFIG_FILE', str(config_file)):
         app = MockSyncApp(source=source, dest=dest, hacks=hacks, gbcsys=gbcsys)
         
         # Verify initial config saving
@@ -626,7 +626,8 @@ def test_mac_cleanup(tmp_path):
         mock_run.assert_called_once_with(
             ["dot_clean", "-m", "/test/path"],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.DEVNULL,
+            check=False
         )
         
     # 2. Test non-Darwin execution
