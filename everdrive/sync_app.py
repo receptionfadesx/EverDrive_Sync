@@ -1386,6 +1386,23 @@ class SyncApp(ctk.CTk):
         merged.update(persisted_map)       # oldest: persisted history
         merged.update(live_clean_fuzzies)  # middle: clean-name fuzzy aliases
         merged.update(live_map)            # newest: live source-ROM fuzzies (always wins)
+
+        # Word-anagram propagation: if a persisted key's words (ignoring punctuation)
+        # are the same set as a live key's words, update the persisted entry to the
+        # current clean name. Handles "The X" ↔ "X, The" word-order changes where
+        # the comma in the fuzzy key makes the sets differ from the live map key.
+        live_word_sets: Dict[frozenset, str] = {}
+        for k, v in live_map.items():
+            words = frozenset(re.sub(r'[^\w\s]', '', k).split())
+            if words:
+                live_word_sets[words] = v
+        for old_fuzzy in list(persisted_map.keys()):
+            if old_fuzzy in live_map:
+                continue
+            old_words = frozenset(re.sub(r'[^\w\s]', '', old_fuzzy).split())
+            if old_words and old_words in live_word_sets:
+                merged[old_fuzzy] = live_word_sets[old_words]
+
         return merged
 
     def _save_name_manifest(

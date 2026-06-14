@@ -967,3 +967,33 @@ def test_name_manifest_orphan_detection(tmp_path):
     assert any("orphaned" in line.lower() or "no matching rom" in line.lower()
                for line in app.logs), \
         f"Expected orphan warning in logs; got:\n" + "\n".join(app.logs)
+
+
+def test_name_manifest_word_anagram_propagation():
+    """A save named with 'X, The' is renamed correctly when the ROM's word order changed.
+
+    Simulates two syncs where the clean name's word order flipped:
+      Sync 1: clean name 'Revenge, The' → manifest key 'revenge, the' (comma retained by
+              get_fuzzy_title since commas are not stripped)
+      Sync 2: live map has 'the revenge' → 'The Revenge' (different fuzzy key, same words)
+
+    Without word-anagram propagation, _build_merged_name_map returns
+    {'revenge, the': 'Revenge, The', 'the revenge': 'The Revenge'} and a save
+    'Revenge, The.sav' (fuzzy 'revenge, the') maps to the stale old clean name.
+
+    With propagation, 'revenge, the' is updated to 'The Revenge' because the word
+    sets {revenge, the} match between the persisted key and the live key.
+    """
+    from sync_everdrive import SyncApp
+    persisted = {"revenge, the": "Revenge, The"}   # stale: clean-name alias from sync 1
+    live = {"the revenge": "The Revenge"}           # new clean name with different word order
+    merged = SyncApp._build_merged_name_map(live, persisted)
+
+    assert merged.get("revenge, the") == "The Revenge", (
+        f"Word-anagram propagation failed: 'revenge, the' → {merged.get('revenge, the')!r}, "
+        "expected 'The Revenge'."
+    )
+    result = SyncApp._fuzzy_match_rom("Revenge, The", merged)
+    assert result == "The Revenge", (
+        f"Save rename after word-order change failed: got {result!r}, expected 'The Revenge'."
+    )
