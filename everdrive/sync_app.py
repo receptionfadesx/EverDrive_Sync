@@ -1209,6 +1209,7 @@ class SyncApp(ctk.CTk):
         self.after(0, lambda: self.toggle_ui(False))
         temp_unzip_dir = None
         temp_sd_dir = None
+        merged_name_map: Dict[str, str] = {}
         try:
             if self.dry_run:
                 self.log_msg("Starting DRY RUN — no changes will be made...")
@@ -1232,10 +1233,15 @@ class SyncApp(ctk.CTk):
                 source, temp_unzip_dir, rom_exts, save_exts, os_folder_upper
             )
 
+            persisted_name_map = SyncApp._load_name_manifest(source, hacks)
+
             if self.chk_reorganize_var.get():
                 v_root, rom_name_map = self._build_reorganize_tree(
                     source, hacks, os_folder, save_base, rtc_base,
                     rom_exts, save_exts, system_groups, sav_files, other_files, favs
+                )
+                merged_name_map = SyncApp._build_merged_name_map(
+                    rom_name_map, persisted_name_map
                 )
 
                 def count_files(n):
@@ -1246,12 +1252,16 @@ class SyncApp(ctk.CTk):
                     return c
 
                 self.prog_max = max(1, count_files(v_root))
-                self.rename_sd_saves(dest, os_folder, save_base, rtc_base, rom_name_map)
+                self.rename_sd_saves(dest, os_folder, save_base, rtc_base, merged_name_map)
+                self._log_orphaned_saves(
+                    dest, os_folder, save_base, rtc_base, merged_name_map
+                )
                 self.copy_virtual_tree(
                     v_root, dest, sd_catalog,
                     self.chk_folders_last_var.get(), self.chk_recent_var.get()
                 )
             else:
+                merged_name_map = persisted_name_map
                 self._run_bypass_mode(
                     source, hacks, dest, os_folder, save_base, rtc_base, rom_exts, save_exts
                 )
@@ -1295,6 +1305,8 @@ class SyncApp(ctk.CTk):
                 shutil.rmtree(temp_unzip_dir)
             if temp_sd_dir and os.path.exists(temp_sd_dir):
                 shutil.rmtree(temp_sd_dir, ignore_errors=True)
+            if not self.dry_run and merged_name_map:
+                self._save_name_manifest(source, hacks, merged_name_map)
             self._write_sync_report(source, hacks)
             self.after(0, lambda: self.toggle_ui(True))
             self.after(0, lambda: self.progress_bar.set(0))
@@ -1320,6 +1332,108 @@ class SyncApp(ctk.CTk):
                 f.write("\n".join(lines) + "\n")
         except OSError:
             pass
+
+    # ------------------------------------------------------------------ #
+    # Name manifest — persists fuzzy→clean mappings across syncs          #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _backup_root(source: str, hacks: str) -> Optional[str]:
+        """Return the Saves_Backup directory to use, or None if neither path is valid."""
+        for base in (source, hacks):
+            if base and os.path.isdir(base):
+                return os.path.join(base, "Saves_Backup")
+        return None
+
+    @staticmethod
+    def _load_name_manifest(source: str, hacks: str) -> Dict[str, str]:
+        """Load the persisted fuzzy→clean name map from the previous sync."""
+        for base in (source, hacks):
+            if not (base and os.path.isdir(base)):
+                continue
+            path = os.path.join(base, "Saves_Backup", "rom_name_map.json")
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return {str(k): str(v) for k, v in data.items()}
+            except (json.JSONDecodeError, OSError):
+                pass
+        return {}
+
+    @staticmethod
+    def _build_merged_name_map(
+        live_map: Dict[str, str], persisted_map: Dict[str, str]
+    ) -> Dict[str, str]:
+        """Merge live and persisted maps so saves survive clean-name changes.
+
+        Strategy:
+        - Start with persisted entries (historical coverage).
+        - Add entries keyed by each live clean name's own fuzzy title — this lets a
+          save named after a *previous* clean name be matched on the next sync even
+          if the source ROM's fuzzy title has changed slightly.
+        - Override with live entries last so the current clean name always wins.
+        """
+        # Map from get_fuzzy_title(clean_name) → clean_name for every live ROM.
+        # Example: clean name "Pokemon - Red Version" → key "pokemon red version"
+        live_clean_fuzzies: Dict[str, str] = {}
+        for clean_name in live_map.values():
+            live_clean_fuzzies[get_fuzzy_title(clean_name)] = clean_name
+
+        merged: Dict[str, str] = {}
+        merged.update(persisted_map)       # oldest: persisted history
+        merged.update(live_clean_fuzzies)  # middle: clean-name fuzzy aliases
+        merged.update(live_map)            # newest: live source-ROM fuzzies (always wins)
+        return merged
+
+    def _save_name_manifest(
+        self, source: str, hacks: str, manifest: Dict[str, str]
+    ) -> None:
+        """Persist the merged fuzzy→clean name map for the next sync."""
+        backup_root = SyncApp._backup_root(source, hacks)
+        if not backup_root:
+            return
+        try:
+            os.makedirs(backup_root, exist_ok=True)
+            with open(
+                os.path.join(backup_root, "rom_name_map.json"), "w", encoding="utf-8"
+            ) as f:
+                json.dump(manifest, f, indent=2, sort_keys=True)
+        except OSError:
+            pass
+
+    def _log_orphaned_saves(  # pylint: disable=too-many-arguments
+        self, dest: str, os_folder: str, save_base: str, rtc_base: str,
+        merged_map: Dict[str, str]
+    ) -> None:
+        """Warn about save files on the SD that have no matching ROM in the merged map."""
+        if os_folder.lower() == "edgba":
+            gamedata = os.path.join(dest, os_folder, "gamedata")
+            if not os.path.isdir(gamedata):
+                return
+            for folder in os.listdir(gamedata):
+                stem = os.path.splitext(folder)[0]
+                if SyncApp._fuzzy_match_rom(stem, merged_map) is None:
+                    self.log_msg(
+                        f"Warning: save folder '{folder}' has no matching ROM"
+                        " — save may be orphaned (source ROM was renamed or removed)."
+                    )
+        else:
+            for save_dir in [save_base, rtc_base]:
+                sp = os.path.join(dest, os_folder, save_dir)
+                if not os.path.isdir(sp):
+                    continue
+                for f in os.listdir(sp):
+                    if not os.path.isfile(os.path.join(sp, f)):
+                        continue
+                    stem = os.path.splitext(f)[0]
+                    if SyncApp._fuzzy_match_rom(stem, merged_map) is None:
+                        self.log_msg(
+                            f"Warning: save '{f}' has no matching ROM"
+                            " — save may be orphaned (source ROM was renamed or removed)."
+                        )
 
     def eject_sd(self, dest) -> bool:
         sysname = platform.system()

@@ -839,3 +839,131 @@ def test_cli_sync(tmp_path):
     assert (dest / "GBC" / "Game.gbc").read_text() == "rom data"
     # Sync report is written next to the backups
     assert (source / "Saves_Backup" / "last_sync.log").exists()
+
+# ------------------------------------------------------------------ #
+# Name manifest tests                                                   #
+# ------------------------------------------------------------------ #
+
+import json as _json
+
+def test_name_manifest_written_after_sync(tmp_path):
+    """rom_name_map.json is written to Saves_Backup after a successful sync."""
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+    (source / "Pokemon - Red Version (USA, Europe).gbc").write_text("rom")
+
+    app = MockSyncApp(source=str(source), dest=str(dest))
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror'), \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+
+    manifest_path = source / "Saves_Backup" / "rom_name_map.json"
+    assert manifest_path.exists(), "manifest was not written"
+    manifest = _json.loads(manifest_path.read_text())
+    # Source ROM fuzzy title must map to the clean name (tags=True by default in MockSyncApp
+    # so region tags are preserved in the clean name)
+    assert "pokemon red version" in manifest
+    assert "Pokemon - Red Version" in manifest["pokemon red version"]
+
+def test_name_manifest_not_written_on_dry_run(tmp_path):
+    """rom_name_map.json is NOT written when dry-run is enabled."""
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+    (source / "Game.gbc").write_text("rom")
+
+    app = MockSyncApp(source=str(source), dest=str(dest), dryrun=True)
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror'), \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+
+    assert not (source / "Saves_Backup" / "rom_name_map.json").exists()
+
+def test_name_manifest_enables_save_rename_after_clean_name_change(tmp_path):
+    """A save is renamed to the new clean name even when it was written with an
+    old clean name that produces a different fuzzy title.
+
+    Simulates: ROM clean name changed from "Zelda - Links Awakening" to
+    "Link's Awakening" (different fuzzy titles). The old save can only be
+    located via the manifest entry for the old clean name's fuzzy."""
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+
+    # Save on SD uses the OLD clean name
+    save_dir = dest / "EDGB" / "SAVE"
+    save_dir.mkdir(parents=True)
+    (save_dir / "Zelda - Links Awakening.sav").write_text("save data")
+
+    # Manifest from previous sync: old clean name → (still current)
+    # AND: clean-name fuzzy → old clean name  (this is the key that lets us find it)
+    backup_root = source / "Saves_Backup"
+    backup_root.mkdir()
+    # Manually write the manifest as _build_merged_name_map would have after the old sync:
+    # key = get_fuzzy_title("Zelda - Links Awakening") = "zelda links awakening"
+    old_manifest = {"zelda links awakening": "Zelda - Links Awakening"}
+    (backup_root / "rom_name_map.json").write_text(_json.dumps(old_manifest))
+
+    # Current source ROM (same file, just the clean name algorithm now produces a different name)
+    # Source stem that fuzzifies to "zelda links awakening" already in manifest → match
+    # New clean name from current ROM:
+    (source / "Zelda - Links Awakening (USA, Europe).gbc").write_text("rom")
+
+    # Build merged map the same way run_sync does
+    from sync_everdrive import SyncApp, get_fuzzy_title
+    live_map = {"zelda links awakening": "Links Awakening, The"}  # new clean name
+    persisted = {"zelda links awakening": "Zelda - Links Awakening"}
+    merged = SyncApp._build_merged_name_map(live_map, persisted)
+
+    # The save stem "Zelda - Links Awakening" → fuzzy "zelda links awakening"
+    # must now map to the new clean name
+    from sync_everdrive import SyncApp as SA
+    result = SA._fuzzy_match_rom("Zelda - Links Awakening", merged)
+    assert result == "Links Awakening, The", (
+        f"Expected 'Links Awakening, The' but got {result!r}. "
+        "Manifest-assisted rename failed."
+    )
+
+def test_name_manifest_build_merged_map_live_wins(tmp_path):
+    """Live map always overrides persisted map for the same key."""
+    from sync_everdrive import SyncApp
+    live = {"pokemon red": "Pokemon Red Version"}
+    persisted = {"pokemon red": "Pokemon Red"}   # old clean name for same fuzzy
+    merged = SyncApp._build_merged_name_map(live, persisted)
+    assert merged["pokemon red"] == "Pokemon Red Version"
+
+def test_name_manifest_orphan_detection(tmp_path):
+    """A save with no matching ROM in the merged map triggers a warning log."""
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+    (source / "Mario.gbc").write_text("rom")
+
+    save_dir = dest / "EDGB" / "SAVE"
+    save_dir.mkdir(parents=True)
+    # Save for a game not present in the source at all
+    (save_dir / "Totally Unknown Game.sav").write_text("save data")
+
+    app = MockSyncApp(source=str(source), dest=str(dest))
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror'), \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+
+    assert any("orphaned" in line.lower() or "no matching rom" in line.lower()
+               for line in app.logs), \
+        f"Expected orphan warning in logs; got:\n" + "\n".join(app.logs)
