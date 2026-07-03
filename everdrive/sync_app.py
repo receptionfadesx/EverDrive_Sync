@@ -5,6 +5,7 @@ import os
 import sys
 import re
 import json
+import filecmp
 import shutil
 import zipfile
 import platform
@@ -35,9 +36,43 @@ from .utils import (
 )
 from .rom_utils import (
     get_clean_rom_name, get_fuzzy_title,
-    get_best_region_games, get_series_groups,
+    get_best_region_games, get_series_groups, sanitize_fat32,
 )
 from .virtual_tree import VirtualNode, add_to_virtual_tree
+from .dat_check import load_dat_index, verify_files_against_dat
+
+# Folders on the SD card that must never be deleted or counted as reclaimable
+SYSTEM_FOLDERS = {
+    "edgb", "gbos", "gbcsys", "ed64", "gbasys", "edgba",
+    "system volume information", ".sync_temp"
+}
+
+
+# Module-level (like check_cancel) so they also work when SyncApp methods are
+# invoked unbound on minimal stand-in instances in tests/headless mode.
+def _stat_bump(instance, key, n=1):
+    stats = getattr(instance, "stats", None)
+    if stats is not None:
+        stats[key] = stats.get(key, 0) + n
+
+
+def _copy_verified(instance, src, dst):
+    """copy2 with optional read-back verification (SD cards corrupt silently)."""
+    shutil.copy2(src, dst)
+    if not getattr(instance, "verify_writes", False):
+        return
+    if filecmp.cmp(src, dst, shallow=False):
+        return
+    try:
+        os.remove(dst)
+    except OSError:
+        pass
+    shutil.copy2(src, dst)  # one retry before giving up
+    if not filecmp.cmp(src, dst, shallow=False):
+        raise OSError(
+            f"Verification failed after copying '{os.path.basename(dst)}'"
+            " — the SD card may be failing or counterfeit."
+        )
 
 
 # pylint: disable=attribute-defined-outside-init
@@ -48,19 +83,46 @@ class SyncApp(ctk.CTk):
     # tkinter's __getattr__ delegation on partially-initialized instances
     # (e.g. headless/test subclasses that skip CTk.__init__).
     dry_run = False
+    verify_writes = False
     cancel_event = None
     session_log = None
+    stats = None
+
+    # (config key, BooleanVar attribute, default) for every persisted option
+    OPTION_VARS = [
+        ("Reorganize", "chk_reorganize_var", True),
+        ("TypeFolders", "chk_type_var", True),
+        ("SeriesFolders", "chk_series_var", True),
+        ("AZFolders", "chk_az_var", True),
+        ("OneGameOneRom", "chk_1g1r_var", False),
+        ("RegionUSA", "chk_usa_var", True),
+        ("RegionWorld", "chk_world_var", True),
+        ("RegionEurope", "chk_eur_var", True),
+        ("RegionJapan", "chk_jpn_var", True),
+        ("ExtractZips", "chk_zip_var", False),
+        ("KeepTags", "chk_tags_var", True),
+        ("Backups", "chk_backups_var", True),
+        ("Restore", "chk_restore_var", False),
+        ("FoldersLast", "chk_folders_last_var", False),
+        ("SortRecent", "chk_recent_var", False),
+        ("Favorites", "chk_fav_var", False),
+        ("Eject", "chk_eject_var", False),
+        ("DryRun", "chk_dryrun_var", False),
+        ("VerifyWrites", "chk_verify_var", False),
+        ("ArchiveOrphans", "chk_orphans_var", False),
+    ]
 
     def __init__(self):
         super().__init__()
         self.title("Sync Tool for EverDrive (GB/GBA/64)")
-        self.geometry("600x920")
+        self.geometry("600x1010")
         # Allow vertical resizing so the window still fits on 768p screens
         self.resizable(False, True)
         self.minsize(600, 600)
 
         self.config_data = {
-            "Source": "", "Hacks": "", "GbcSysPayload": "", "Dest": ""
+            "Source": "", "Hacks": "", "GbcSysPayload": "", "Dest": "",
+            "DatFile": "", "Options": {},
         }
         self.cancel_event = threading.Event()
         self.session_log: List[str] = []
@@ -68,6 +130,7 @@ class SyncApp(ctk.CTk):
         self.load_config()
         self.set_app_icon()
         self.create_widgets()
+        self._apply_saved_options()
 
     def get_asset_path(self, relative_path):
         # getattr is used to satisfy static analysis as _MEIPASS is injected at runtime by PyInstaller
@@ -104,6 +167,14 @@ class SyncApp(ctk.CTk):
         self.config_data["Hacks"] = self.txt_hacks.get()
         self.config_data["GbcSysPayload"] = self.txt_gbcsys.get()
         self.config_data["Dest"] = self.txt_dest.get()
+        dat_widget = getattr(self, "txt_dat", None)
+        if dat_widget is not None:
+            self.config_data["DatFile"] = dat_widget.get()
+        self.config_data["Options"] = {
+            key: bool(getattr(self, attr).get())
+            for key, attr, _default in self.OPTION_VARS
+            if getattr(self, attr, None) is not None
+        }
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.config_data, f)
@@ -119,15 +190,16 @@ class SyncApp(ctk.CTk):
         self._build_options_frame()
         self._build_log_controls()
 
-    def _add_path_row(self, parent, row, label, key):
+    def _add_path_row(self, parent, row, label, key, file_picker=False):
         """Add one Source/Dest browse row; return the CTkEntry widget."""
         ctk.CTkLabel(parent, text=label).grid(row=row, column=0, padx=5, pady=5, sticky="w")
         entry = ctk.CTkEntry(parent, width=350)
         entry.insert(0, self.config_data[key])
         entry.grid(row=row, column=1, padx=5, pady=5)
+        browse = self.browse_file if file_picker else self.browse_folder
         ctk.CTkButton(
             parent, text="Browse...", width=80,
-            command=lambda e=entry: self.browse_folder(e)
+            command=lambda e=entry: browse(e)
         ).grid(row=row, column=2, padx=5, pady=5)
         return entry
 
@@ -138,6 +210,7 @@ class SyncApp(ctk.CTk):
         self.txt_hacks = self._add_path_row(frame, 1, "ROM Hacks:", "Hacks")
         self.txt_gbcsys = self._add_path_row(frame, 2, "GBCSYS:", "GbcSysPayload")
         self.txt_dest = self._add_path_row(frame, 3, "SD Card:", "Dest")
+        self.txt_dat = self._add_path_row(frame, 4, "DAT File:", "DatFile", file_picker=True)
 
     def _build_reorg_group(self, parent):
         self.chk_reorganize_var = tk.BooleanVar(value=True)
@@ -205,6 +278,8 @@ class SyncApp(ctk.CTk):
             ("chk_tags", "Keep Tags", True),
             ("chk_backups", "Backup SD saves to PC", True),
             ("chk_restore", "Restore saves from PC to SD", False),
+            ("chk_verify", "Verify writes (slower, safer)", False),
+            ("chk_orphans", "Archive orphaned saves to PC", False),
             ("chk_folders_last", "Advanced: Folders AFTER games", False),
             ("chk_recent", "Advanced: Sort Hacks by Date", False),
             ("chk_fav", "Advanced: Push favorites to top", False),
@@ -265,11 +340,30 @@ class SyncApp(ctk.CTk):
         self.chk_eur.configure(state=state)
         self.chk_jpn.configure(state=state)
 
+    def _apply_saved_options(self):
+        """Restore checkbox states persisted by a previous session."""
+        opts = self.config_data.get("Options") or {}
+        for key, attr, _default in self.OPTION_VARS:
+            if key in opts:
+                var = getattr(self, attr, None)
+                if var is not None:
+                    var.set(bool(opts[key]))
+        self.toggle_reorg()
+        self.toggle_1g1r()
+
     def browse_folder(self, entry_widget):
         folder = filedialog.askdirectory()
         if folder:
             entry_widget.delete(0, tk.END)
             entry_widget.insert(0, folder)
+
+    def browse_file(self, entry_widget):
+        path = filedialog.askopenfilename(
+            filetypes=[("DAT files", "*.dat *.xml"), ("All files", "*.*")]
+        )
+        if path:
+            entry_widget.delete(0, tk.END)
+            entry_widget.insert(0, path)
 
     def log_msg(self, msg):
         print(msg)
@@ -302,7 +396,7 @@ class SyncApp(ctk.CTk):
         state = "normal" if enabled else "disabled"
         for widget in (
             self.btn_start, self.txt_source, self.txt_dest,
-            self.txt_hacks, self.txt_gbcsys,
+            self.txt_hacks, self.txt_gbcsys, self.txt_dat,
         ):
             widget.configure(state=state)
         if enabled:
@@ -316,7 +410,8 @@ class SyncApp(ctk.CTk):
                 w.configure(state="disabled")
         for w in (
             self.chk_reorganize, self.chk_1g1r, self.chk_zip, self.chk_tags,
-            self.chk_backups, self.chk_restore, self.chk_fav, self.chk_folders_last,
+            self.chk_backups, self.chk_restore, self.chk_verify, self.chk_orphans,
+            self.chk_fav, self.chk_folders_last,
             self.chk_recent, self.chk_eject, self.chk_dryrun,
         ):
             w.configure(state=state)
@@ -366,6 +461,7 @@ class SyncApp(ctk.CTk):
             "hacks": self.txt_hacks.get().strip(),
             "gbcsys": self.txt_gbcsys.get().strip(),
             "dest": self.txt_dest.get().strip(),
+            "dat": self.txt_dat.get().strip(),
         }
         threading.Thread(target=lambda: self.run_sync(**params), daemon=True).start()
 
@@ -395,7 +491,7 @@ class SyncApp(ctk.CTk):
         seen_targets = set()
         for child in sorted_child:
             check_cancel(self)
-            target_name = child.name
+            target_name = sanitize_fat32(child.name)
 
             # Path Length Guard: Windows MAX_PATH is 260.
             # We target 240 as a safe limit for the full path.
@@ -465,6 +561,8 @@ class SyncApp(ctk.CTk):
                 return
             if dry_run:
                 self.log_msg(f" -> [DRY RUN] Would replace: {child.name}")
+                _stat_bump(self, "copied")
+                _stat_bump(self, "bytes", source_stat.st_size)
                 self.step_progress()
                 return
             os.remove(target_path)
@@ -481,6 +579,7 @@ class SyncApp(ctk.CTk):
             else:
                 self.log_msg(f" -> Moving (Local): {child.name}")
                 shutil.move(existing_path, target_path)
+            _stat_bump(self, "moved")
             self.step_progress()
             return
 
@@ -488,7 +587,9 @@ class SyncApp(ctk.CTk):
             self.log_msg(f" -> [DRY RUN] Would copy: {child.name}")
         else:
             self.log_msg(f" -> Copying: {child.name}")
-            shutil.copy2(child.source_path, target_path)
+            _copy_verified(self, child.source_path, target_path)
+        _stat_bump(self, "copied")
+        _stat_bump(self, "bytes", source_stat.st_size)
         self.step_progress()
 
     # ------------------------------------------------------------------ #
@@ -560,7 +661,7 @@ class SyncApp(ctk.CTk):
                         self.log_msg(f" -> [DRY RUN] Would restore: {f}")
                     else:
                         os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                        shutil.copy2(src_file, target_path)
+                        _copy_verified(self, src_file, target_path)
                     restored_files.append(target_path)
         if dry_run:
             self.log_msg(f"[DRY RUN] Would restore {len(restored_files)} files.")
@@ -608,12 +709,8 @@ class SyncApp(ctk.CTk):
         """Remove all non-system files/folders from the SD card root (Soft Format).
         This ensures the FAT32 filesystem creates entries in alphabetical order."""
         self.log_msg("Cleaning SD card (preserving EverDrive OS folders)...")
-        system_folders = {
-            "edgb", "gbos", "gbcsys", "ed64", "gbasys", "edgba",
-            "system volume information", ".sync_temp"
-        }
         for item in os.listdir(dest):
-            if item.lower() in system_folders:
+            if item.lower() in SYSTEM_FOLDERS:
                 continue
             full = os.path.join(dest, item)
             try:
@@ -623,6 +720,7 @@ class SyncApp(ctk.CTk):
                     shutil.rmtree(full)
                 else:
                     os.remove(full)
+                _stat_bump(self, "removed")
             except OSError as e:
                 self.log_msg(f"Warning: Could not remove '{item}': {e}")
 
@@ -685,6 +783,7 @@ class SyncApp(ctk.CTk):
                                 self.log_msg(f" -> [DRY RUN] Would rename: {f} -> {new_f_name}")
                             else:
                                 os.rename(f_path, new_f_path)
+                            _stat_bump(self, "renamed")
             if item != new_folder_name:
                 new_folder_path = os.path.join(gamedata_path, new_folder_name)
                 if not os.path.exists(new_folder_path):
@@ -695,6 +794,7 @@ class SyncApp(ctk.CTk):
                     else:
                         self.log_msg(f" -> Renaming GBA PRO folder: {item} -> {new_folder_name}")
                         os.rename(item_path, new_folder_path)
+                    _stat_bump(self, "renamed")
 
     def _rename_standard_saves(
         self, dest: str, os_folder: str, save_base: str, rtc_base: str,
@@ -730,6 +830,7 @@ class SyncApp(ctk.CTk):
                         else:
                             self.log_msg(f" -> Renaming SD save: {f} -> {new_name}")
                             os.rename(full, new_full)
+                        _stat_bump(self, "renamed")
                     else:
                         self.log_msg(
                             f"Warning: Could not rename '{f}' to '{new_name}'"
@@ -774,7 +875,12 @@ class SyncApp(ctk.CTk):
                     self.log_msg(f" -> [DRY RUN] Would copy: {item}")
                 else:
                     self.log_msg(f" -> Copying: {item}")
-                    shutil.copy2(s, d)
+                    _copy_verified(self, s, d)
+                _stat_bump(self, "copied")
+                try:
+                    _stat_bump(self, "bytes", os.path.getsize(s))
+                except OSError:
+                    pass
                 self.step_progress()
 
     def mac_cleanup(self, path):
@@ -849,6 +955,56 @@ class SyncApp(ctk.CTk):
             return self.ask_okcancel(
                 "WARNING", f"Dest '{dest}' looks like a system path. Proceed?"
             )
+        return True
+
+    def _check_free_space(self, source, hacks, dest) -> bool:
+        """Pre-flight: refuse to start when the card clearly can't hold the library."""
+        try:
+            free = shutil.disk_usage(dest).free
+        except OSError:
+            return True  # can't determine — proceed
+        required = 0
+        for base in (source, hacks):
+            if not (base and os.path.isdir(base)):
+                continue
+            for p in Path(base).rglob("*"):
+                try:
+                    if p.is_file() and "Saves_Backup" not in p.parts:
+                        required += p.stat().st_size
+                except OSError:
+                    continue
+        reclaimable = 0
+        if self.chk_reorganize_var.get():
+            # Reorganise moves or deletes every non-system entry on the card,
+            # so that space becomes available again during the sync.
+            for item in os.listdir(dest):
+                if item.lower() in SYSTEM_FOLDERS:
+                    continue
+                full = os.path.join(dest, item)
+                try:
+                    if os.path.isfile(full):
+                        reclaimable += os.path.getsize(full)
+                    else:
+                        for root, _, files in os.walk(full):
+                            for f in files:
+                                try:
+                                    reclaimable += os.path.getsize(os.path.join(root, f))
+                                except OSError:
+                                    continue
+                except OSError:
+                    continue
+        available = free + reclaimable
+        if required > available:
+            msg = (
+                f"Not enough space on the SD card: the library needs"
+                f" ~{required / 1_000_000:.0f} MB but only"
+                f" ~{available / 1_000_000:.0f} MB would be available."
+            )
+            if getattr(self, "dry_run", False):
+                self.log_msg(f"Warning: {msg} (continuing — dry run)")
+                return True
+            self.show_error("Error", msg)
+            return False
         return True
 
     def _detect_os_folder(self, dest) -> Tuple[str, str, str]:
@@ -1195,7 +1351,8 @@ class SyncApp(ctk.CTk):
                 self.log_msg(f" -> [DRY RUN] Would copy hack: {clean_name + f.suffix}")
             else:
                 os.makedirs(target_dir, exist_ok=True)
-                shutil.copy2(str(f), os.path.join(target_dir, clean_name + f.suffix))
+                _copy_verified(self, str(f), os.path.join(target_dir, clean_name + f.suffix))
+            _stat_bump(self, "copied")
             bypass_rom_name_map[get_fuzzy_title(f.stem)] = clean_name
             self.step_progress()
 
@@ -1222,7 +1379,8 @@ class SyncApp(ctk.CTk):
                     self.log_msg(f" -> [DRY RUN] Would place save: {final_sav_name}")
                 else:
                     os.makedirs(save_sub_dir, exist_ok=True)
-                    shutil.copy2(str(p), os.path.join(save_sub_dir, final_sav_name))
+                    _copy_verified(self, str(p), os.path.join(save_sub_dir, final_sav_name))
+                _stat_bump(self, "copied")
 
     def _copy_gbcsys_payload(self, gbcsys, dest, os_folder):
         if not (gbcsys and os.path.isdir(gbcsys)):
@@ -1243,13 +1401,14 @@ class SyncApp(ctk.CTk):
                     self.log_msg(f" -> [DRY RUN] Would copy payload: {rel_path}")
                 else:
                     os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                    shutil.copy2(src_file, target_path)
+                    _copy_verified(self, src_file, target_path)
+                _stat_bump(self, "copied")
 
     # ------------------------------------------------------------------ #
     # Main sync orchestrator                                                #
     # ------------------------------------------------------------------ #
 
-    def run_sync(self, source=None, hacks=None, gbcsys=None, dest=None):
+    def run_sync(self, source=None, hacks=None, gbcsys=None, dest=None, dat=None):
         # Values are passed in by start_sync_thread (read on the main thread);
         # fall back to widget reads for direct callers.
         if source is None:
@@ -1260,9 +1419,14 @@ class SyncApp(ctk.CTk):
             gbcsys = self.txt_gbcsys.get().strip()
         if dest is None:
             dest = self.txt_dest.get().strip()
+        if dat is None:
+            dat_widget = getattr(self, "txt_dat", None)
+            dat = dat_widget.get().strip() if dat_widget else ""
 
         dryrun_var = getattr(self, "chk_dryrun_var", None)
         self.dry_run = bool(dryrun_var.get()) if dryrun_var else False
+        verify_var = getattr(self, "chk_verify_var", None)
+        self.verify_writes = bool(verify_var.get()) if verify_var else False
 
         if not self._validate_inputs(source, hacks, dest):
             return
@@ -1279,10 +1443,17 @@ class SyncApp(ctk.CTk):
 
         save_exts = set(SAVE_EXTS)
 
+        if not self._check_free_space(source, hacks, dest):
+            return
+
         self.after(0, lambda: self.toggle_ui(False))
         temp_unzip_dir = None
         temp_sd_dir = None
         sync_ok = False
+        self.stats = {
+            "copied": 0, "moved": 0, "removed": 0,
+            "renamed": 0, "archived": 0, "bytes": 0,
+        }
         merged_name_map: Dict[str, str] = {}
         try:
             if self.dry_run:
@@ -1307,6 +1478,9 @@ class SyncApp(ctk.CTk):
                 source, temp_unzip_dir, rom_exts, save_exts, os_folder_upper
             )
 
+            if dat:
+                self._verify_dat(dat, system_groups)
+
             persisted_name_map = SyncApp._load_name_manifest(source, hacks)
 
             if self.chk_reorganize_var.get():
@@ -1327,8 +1501,9 @@ class SyncApp(ctk.CTk):
 
                 self.prog_max = max(1, count_files(v_root))
                 self.rename_sd_saves(dest, os_folder, save_base, rtc_base, merged_name_map, favs)
-                self._log_orphaned_saves(
-                    dest, os_folder, save_base, rtc_base, merged_name_map
+                self._handle_orphaned_saves(
+                    dest, os_folder, save_base, rtc_base, merged_name_map,
+                    SyncApp._backup_root(source, hacks)
                 )
                 self.copy_virtual_tree(
                     v_root, dest, sd_catalog,
@@ -1349,6 +1524,8 @@ class SyncApp(ctk.CTk):
 
             if not self.dry_run:
                 self.mac_cleanup(dest)
+
+            self._log_summary()
 
             if self.dry_run:
                 self.log_msg("Dry run complete — no changes were made.")
@@ -1514,11 +1691,46 @@ class SyncApp(ctk.CTk):
         except OSError:
             pass
 
-    def _log_orphaned_saves(  # pylint: disable=too-many-arguments
+    def _archive_orphan(self, path: str, backup_root: str) -> None:
+        """Move an orphaned save (file, or GBA Pro gamedata folder) to the PC backup."""
+        name = os.path.basename(path)
+        if getattr(self, "dry_run", False):
+            self.log_msg(f" -> [DRY RUN] Would archive orphaned save: {name}")
+            _stat_bump(self, "archived")
+            return
+        orphan_dir = os.path.join(backup_root, "Orphaned")
+        os.makedirs(orphan_dir, exist_ok=True)
+        target = os.path.join(orphan_dir, name)
+        base, ext = os.path.splitext(name)
+        n = 1
+        while os.path.exists(target):
+            target = os.path.join(orphan_dir, f"{base} ({n}){ext}")
+            n += 1
+        try:
+            shutil.move(path, target)
+            self.log_msg(f" -> Archived orphaned save to PC: {name}")
+            _stat_bump(self, "archived")
+        except OSError as e:
+            self.log_msg(f"Warning: could not archive orphaned save '{name}': {e}")
+
+    def _handle_orphaned_saves(  # pylint: disable=too-many-arguments
         self, dest: str, os_folder: str, save_base: str, rtc_base: str,
-        merged_map: Dict[str, str]
+        merged_map: Dict[str, str], backup_root: Optional[str] = None
     ) -> None:
-        """Warn about save files on the SD that have no matching ROM in the merged map."""
+        """Warn about SD saves with no matching ROM; optionally archive them to the PC."""
+        orphans_var = getattr(self, "chk_orphans_var", None)
+        archive = bool(orphans_var.get()) if orphans_var else False
+        archive = archive and backup_root is not None
+
+        def _handle(path, label):
+            if archive:
+                self._archive_orphan(path, backup_root)
+            else:
+                self.log_msg(
+                    f"Warning: {label} has no matching ROM"
+                    " — save may be orphaned (source ROM was renamed or removed)."
+                )
+
         if os_folder.lower() == "edgba":
             gamedata = os.path.join(dest, os_folder, "gamedata")
             if not os.path.isdir(gamedata):
@@ -1526,10 +1738,7 @@ class SyncApp(ctk.CTk):
             for folder in os.listdir(gamedata):
                 stem = os.path.splitext(folder)[0]
                 if SyncApp._fuzzy_match_rom(stem, merged_map) is None:
-                    self.log_msg(
-                        f"Warning: save folder '{folder}' has no matching ROM"
-                        " — save may be orphaned (source ROM was renamed or removed)."
-                    )
+                    _handle(os.path.join(gamedata, folder), f"save folder '{folder}'")
         else:
             for save_dir in [save_base, rtc_base]:
                 sp = os.path.join(dest, os_folder, save_dir)
@@ -1540,10 +1749,53 @@ class SyncApp(ctk.CTk):
                         continue
                     stem = os.path.splitext(f)[0]
                     if SyncApp._fuzzy_match_rom(stem, merged_map) is None:
-                        self.log_msg(
-                            f"Warning: save '{f}' has no matching ROM"
-                            " — save may be orphaned (source ROM was renamed or removed)."
-                        )
+                        _handle(os.path.join(sp, f), f"save '{f}'")
+
+    def _verify_dat(self, dat_path: str, system_groups: dict) -> None:
+        """Verify source ROM CRC32s against a No-Intro (Logiqx XML) DAT file."""
+        if not os.path.isfile(dat_path):
+            self.log_msg(f"Warning: DAT file not found: {dat_path}")
+            return
+        try:
+            dat_index = load_dat_index(dat_path)
+        except (OSError, ValueError) as e:
+            self.log_msg(f"Warning: could not read DAT file: {e}")
+            return
+        all_roms = [f for files in system_groups.values() for f in files]
+        if not all_roms:
+            return
+        self.log_msg(
+            f"Verifying {len(all_roms)} ROMs against DAT ({len(dat_index)} entries)..."
+        )
+        verified, unknown, dups = verify_files_against_dat(
+            all_roms, dat_index, on_file=lambda _f: check_cancel(self)
+        )
+        for f, crc in unknown:
+            suffix = f" (CRC {crc})" if crc else ""
+            self.log_msg(
+                f"DAT: no match for '{f.name}'{suffix} — file may be modified or renamed."
+            )
+        for f, first in dups:
+            self.log_msg(f"DAT: duplicate content — '{f.name}' is identical to '{first.name}'.")
+        self.log_msg(
+            f"DAT check: {len(verified)}/{len(all_roms)} verified,"
+            f" {len(unknown)} unknown, {len(dups)} duplicates."
+        )
+
+    def _log_summary(self) -> None:
+        s = getattr(self, "stats", None)
+        if not s:
+            return
+        prefix = "[DRY RUN] Planned totals" if getattr(self, "dry_run", False) else "Summary"
+        parts = [
+            f"{s.get('copied', 0)} copied ({s.get('bytes', 0) / 1_000_000:.1f} MB)",
+            f"{s.get('moved', 0)} moved",
+            f"{s.get('removed', 0)} removed",
+            f"{s.get('renamed', 0)} renamed",
+        ]
+        if s.get("archived"):
+            parts.append(f"{s['archived']} orphaned saves archived")
+        self.log_msg(f"{prefix}: " + ", ".join(parts) + ".")
 
     def eject_sd(self, dest) -> bool:
         sysname = platform.system()

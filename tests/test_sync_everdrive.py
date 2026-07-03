@@ -145,18 +145,19 @@ class DummyApp:
 from sync_everdrive import SyncApp
 
 class MockSyncApp(SyncApp):
-    def __init__(self, source="", dest="", hacks="", gbcsys="", backups=False, zip=False, fav=False, reorg=True, usa=True, world=True, eur=True, jpn=True, series=False, type_folders=True, az=False, tags=True, restore=False, folders_last=False, recent=False, dryrun=False, eject=False):
+    def __init__(self, source="", dest="", hacks="", gbcsys="", dat="", backups=False, zip=False, fav=False, reorg=True, usa=True, world=True, eur=True, jpn=True, series=False, type_folders=True, az=False, tags=True, restore=False, folders_last=False, recent=False, dryrun=False, eject=False, verify=False, orphans=False):
         self.logs = []
         self.session_log = self.logs  # same list: exercises the sync-report path
         self.prog_max = 1
         self.cancel_event = threading.Event()
         self.config_data = {
-            "Source": str(source), "Hacks": str(hacks), "GbcSysPayload": str(gbcsys), "Dest": str(dest)
+            "Source": str(source), "Hacks": str(hacks), "GbcSysPayload": str(gbcsys), "Dest": str(dest), "DatFile": str(dat)
         }
         self.txt_source = type('MockEntry', (), {'get': lambda *a: str(self.config_data["Source"])})()
         self.txt_hacks = type('MockEntry', (), {'get': lambda *a: str(self.config_data["Hacks"])})()
         self.txt_gbcsys = type('MockEntry', (), {'get': lambda *a: str(self.config_data["GbcSysPayload"])})()
         self.txt_dest = type('MockEntry', (), {'get': lambda *a: str(self.config_data["Dest"])})()
+        self.txt_dat = type('MockEntry', (), {'get': lambda *a: str(self.config_data["DatFile"])})()
         
         self.chk_backups_var = type('MockVar', (), {'get': lambda *a: backups})()
         self.chk_zip_var = type('MockVar', (), {'get': lambda *a: zip})()
@@ -176,6 +177,8 @@ class MockSyncApp(SyncApp):
         self.chk_recent_var = type('MockVar', (), {'get': lambda *a: recent})()
         self.chk_dryrun_var = type('MockVar', (), {'get': lambda *a: dryrun})()
         self.chk_eject_var = type('MockVar', (), {'get': lambda *a: eject})()
+        self.chk_verify_var = type('MockVar', (), {'get': lambda *a: verify})()
+        self.chk_orphans_var = type('MockVar', (), {'get': lambda *a: orphans})()
 
         self.progress_bar = type('MockProgress', (), {'set': lambda *a: None, 'get': lambda *a: 0.0})()
         
@@ -1244,14 +1247,18 @@ def test_truncated_name_collision_gets_uniquified(tmp_path):
 def test_cli_flags_cover_every_gui_checkbox():
     from sync_everdrive import build_arg_parser, HeadlessApp
     args = build_arg_parser().parse_args([
-        "--dest", "/nonexistent/sd",
+        "--dest", "/nonexistent/sd", "--dat", "/nonexistent/set.dat",
         "--no-reorg", "--no-type", "--no-series", "--no-az",
         "--1g1r", "--no-usa", "--no-world", "--no-europe", "--no-japan",
         "--extract-zips", "--no-tags", "--no-backup", "--restore",
         "--folders-last", "--sort-recent", "--favorites",
+        "--verify", "--archive-orphans",
         "--eject", "--dry-run", "--yes",
     ])
     app = HeadlessApp(args)
+    assert app.chk_verify_var.get() is True
+    assert app.chk_orphans_var.get() is True
+    assert app.txt_dat.get() == "/nonexistent/set.dat"
     assert app.chk_reorganize_var.get() is False
     assert app.chk_type_var.get() is False
     assert app.chk_series_var.get() is False
@@ -1270,6 +1277,281 @@ def test_cli_flags_cover_every_gui_checkbox():
     assert app.chk_fav_var.get() is True
     assert app.chk_eject_var.get() is True
     assert app.chk_dryrun_var.get() is True
+
+
+# ------------------------------------------------------------------ #
+# New feature tests                                                     #
+# ------------------------------------------------------------------ #
+
+import platform as _platform
+import zlib as _zlib
+
+
+def test_sanitize_fat32():
+    from sync_everdrive import sanitize_fat32, get_clean_rom_name
+    assert sanitize_fat32('Zelda: DX') == 'Zelda - DX'
+    assert sanitize_fat32('What?') == 'What-'
+    assert sanitize_fat32('A<B>C"D/E\\F|G*H') == 'A-B-C-D-E-F-G-H'
+    assert sanitize_fat32('Trailing dots...') == 'Trailing dots'
+    assert sanitize_fat32('Normal Name (USA)') == 'Normal Name (USA)'
+    assert get_clean_rom_name('Zelda: DX') == 'Zelda - DX'
+
+
+@pytest.mark.skipif(_platform.system() == "Windows",
+                    reason="':' cannot appear in source filenames on Windows")
+def test_fat32_unsafe_names_sanitized_on_copy(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+    (source / "Game: Special?.gbc").write_text("rom data")
+
+    app = MockSyncApp(source=str(source), dest=str(dest))
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    assert (dest / "GBC" / "Game - Special-.gbc").read_text() == "rom data"
+
+
+def test_gui_options_saved_and_restored(tmp_path):
+    """Checkbox states round-trip through the config file (README promise)."""
+    config_file = tmp_path / "cfg.json"
+    from unittest.mock import patch
+    with patch('everdrive.sync_app.CONFIG_FILE', str(config_file)):
+        app = MockSyncApp(source="/s", dest="/d", fav=True, backups=False)
+        app.save_config()
+    data = _json.loads(config_file.read_text())
+    assert data["Options"]["Favorites"] is True
+    assert data["Options"]["Backups"] is False
+    assert "DatFile" in data
+
+    # Apply side: saved values land back on the checkbox variables
+    from sync_everdrive import SyncApp
+
+    class _Var:
+        def __init__(self, v):
+            self.v = v
+        def get(self):
+            return self.v
+        def set(self, v):
+            self.v = bool(v)
+
+    class _Holder:
+        OPTION_VARS = SyncApp.OPTION_VARS
+        def toggle_reorg(self):
+            pass
+        def toggle_1g1r(self):
+            pass
+
+    holder = _Holder()
+    holder.config_data = {"Options": {"Favorites": True, "Backups": False}}
+    holder.chk_fav_var = _Var(False)
+    holder.chk_backups_var = _Var(True)
+    SyncApp._apply_saved_options(holder)
+    assert holder.chk_fav_var.get() is True
+    assert holder.chk_backups_var.get() is False
+
+
+def test_free_space_check_blocks_sync(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+    (source / "Big Game.gbc").write_bytes(b"x" * 10_000)
+
+    app = MockSyncApp(source=str(source), dest=str(dest))
+    from unittest.mock import patch, Mock
+    with patch('everdrive.sync_app.shutil.disk_usage',
+               return_value=Mock(total=100, used=90, free=10)), \
+         patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+
+    assert "Not enough space" in mock_error.call_args[0][1]
+    assert not (dest / "GBC").exists(), "sync ran despite failing the space check"
+
+
+def test_verify_writes_detects_corruption(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+    (source / "Game.gbc").write_text("rom data")
+
+    import shutil as _shutil
+    real_copy2 = _shutil.copy2
+
+    def corrupting_copy2(src, dst, **kwargs):
+        real_copy2(src, dst, **kwargs)
+        with open(dst, "w") as fh:
+            fh.write("CORRUPT")
+
+    app = MockSyncApp(source=str(source), dest=str(dest), verify=True)
+    from unittest.mock import patch
+    with patch('everdrive.sync_app.shutil.copy2', side_effect=corrupting_copy2), \
+         patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+
+    assert "Verification failed" in mock_error.call_args[0][1]
+
+
+def test_verify_writes_passes_clean_copy(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+    (source / "Game.gbc").write_text("rom data")
+
+    app = MockSyncApp(source=str(source), dest=str(dest), verify=True)
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    assert (dest / "GBC" / "Game.gbc").read_text() == "rom data"
+
+
+def test_orphan_archiving_moves_save_to_pc(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB" / "SAVE").mkdir(parents=True)
+    (source / "Mario.gbc").write_text("rom")
+    orphan = dest / "EDGB" / "SAVE" / "Totally Unknown Game.sav"
+    orphan.write_text("orphan save data")
+
+    app = MockSyncApp(source=str(source), dest=str(dest), orphans=True)
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    assert not orphan.exists()
+    archived = source / "Saves_Backup" / "Orphaned" / "Totally Unknown Game.sav"
+    assert archived.read_text() == "orphan save data"
+    assert any("Archived orphaned save" in line for line in app.logs)
+
+
+def test_sync_summary_logged(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+    (source / "Game.gbc").write_text("rom data")
+
+    app = MockSyncApp(source=str(source), dest=str(dest))
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror'), \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+    assert any(line.startswith("Summary:") and "1 copied" in line for line in app.logs)
+
+    # Dry runs get their own clearly-labelled totals
+    app2 = MockSyncApp(source=str(source), dest=str(dest), dryrun=True)
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror'), \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app2.run_sync()
+    assert any(line.startswith("[DRY RUN] Planned totals") for line in app2.logs)
+
+
+def test_dat_verification_logs(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+
+    (source / "Good Game.gbc").write_bytes(b"good rom data")
+    (source / "Tampered.gbc").write_bytes(b"bad rom data")
+    (source / "Copy of Good.gbc").write_bytes(b"good rom data")
+
+    crc = f"{_zlib.crc32(b'good rom data') & 0xFFFFFFFF:08x}"
+    dat = tmp_path / "set.dat"
+    dat.write_text(
+        '<?xml version="1.0"?><datafile><game name="Good Game">'
+        f'<rom name="Good Game.gbc" crc="{crc}"/></game></datafile>'
+    )
+
+    app = MockSyncApp(source=str(source), dest=str(dest), dat=str(dat))
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    assert any("DAT check: 2/3 verified, 1 unknown, 1 duplicates." in l for l in app.logs)
+    assert any("no match for 'Tampered.gbc'" in l for l in app.logs)
+    assert any("duplicate content" in l for l in app.logs)
+
+
+def test_dat_helpers():
+    from sync_everdrive import load_dat_index
+    import tempfile, os as _os
+    with tempfile.NamedTemporaryFile("w", suffix=".dat", delete=False) as f:
+        f.write('<datafile><game><rom name="A.gb" crc="1A2B3C4D"/>'
+                '<rom name="B.gb" crc="abc"/></game></datafile>')
+        path = f.name
+    try:
+        index = load_dat_index(path)
+        assert index["1a2b3c4d"] == "A.gb"
+        assert index["00000abc"] == "B.gb"  # short CRCs are zero-padded
+    finally:
+        _os.unlink(path)
+    with pytest.raises(ValueError):
+        with tempfile.NamedTemporaryFile("w", suffix=".dat", delete=False) as f:
+            f.write("not xml at all <<<")
+            bad = f.name
+        try:
+            load_dat_index(bad)
+        finally:
+            _os.unlink(bad)
+
+
+def test_cli_use_saved_config(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+    (source / "Game.gbc").write_text("rom data")
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(_json.dumps({
+        "Source": str(source),
+        "Dest": str(dest),
+        "Options": {
+            "TypeFolders": False, "AZFolders": False,
+            "SeriesFolders": False, "Backups": False,
+        },
+    }))
+
+    from unittest.mock import patch
+    with patch('everdrive.headless.CONFIG_FILE', str(cfg)):
+        rc = run_cli(["--use-saved-config", "--yes"])
+    assert rc == 0
+    # TypeFolders was off in the saved config, so no GBC folder
+    assert (dest / "Game.gbc").read_text() == "rom data"
+    assert not (dest / "GBC").exists()
 
 
 def test_manifest_prunes_stale_entries():

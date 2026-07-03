@@ -1,8 +1,10 @@
 """Headless (CLI) adapter — lets the sync engine run without a tkinter window."""
 # pylint: disable=missing-function-docstring,too-many-positional-arguments
 import argparse
+import json
 import threading
 
+from .constants import CONFIG_FILE
 from .sync_app import SyncApp
 
 
@@ -57,34 +59,81 @@ class HeadlessApp(SyncApp):
         self.had_error = False
         self._auto_yes = getattr(args, "yes", False)
 
+        # Optionally seed paths/options from the GUI's saved config; explicit
+        # CLI flags always win.
+        cfg: dict = {}
+        if getattr(args, "use_saved_config", False):
+            try:
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                cfg = {}
+            if not isinstance(cfg, dict):
+                cfg = {}
+        cfg_opts = cfg.get("Options") if isinstance(cfg.get("Options"), dict) else {}
+
+        def opt(key, default):
+            return bool(cfg_opts.get(key, default))
+
+        source = args.source or cfg.get("Source") or ""
+        hacks = args.hacks or cfg.get("Hacks") or ""
+        gbcsys = (getattr(args, "gbcsys", "") or cfg.get("GbcSysPayload") or "")
+        dest = args.dest or cfg.get("Dest") or ""
+        dat = getattr(args, "dat", "") or cfg.get("DatFile") or ""
+
         # Path entries
-        self.txt_source = _StaticEntry(args.source or "")
-        self.txt_hacks = _StaticEntry(args.hacks or "")
-        self.txt_gbcsys = _StaticEntry(getattr(args, "gbcsys", "") or "")
-        self.txt_dest = _StaticEntry(args.dest or "")
+        self.txt_source = _StaticEntry(source)
+        self.txt_hacks = _StaticEntry(hacks)
+        self.txt_gbcsys = _StaticEntry(gbcsys)
+        self.txt_dest = _StaticEntry(dest)
+        self.txt_dat = _StaticEntry(dat)
 
         # Reorganise / structure
-        self.chk_reorganize_var = _StaticVar(not getattr(args, "no_reorg", False))
-        self.chk_type_var = _StaticVar(not getattr(args, "no_type", False))
-        self.chk_series_var = _StaticVar(not getattr(args, "no_series", False))
-        self.chk_az_var = _StaticVar(not getattr(args, "no_az", False))
+        self.chk_reorganize_var = _StaticVar(
+            opt("Reorganize", True) and not getattr(args, "no_reorg", False))
+        self.chk_type_var = _StaticVar(
+            opt("TypeFolders", True) and not getattr(args, "no_type", False))
+        self.chk_series_var = _StaticVar(
+            opt("SeriesFolders", True) and not getattr(args, "no_series", False))
+        self.chk_az_var = _StaticVar(
+            opt("AZFolders", True) and not getattr(args, "no_az", False))
 
         # 1G1R filter
-        self.chk_1g1r_var = _StaticVar(getattr(args, "one_game_one_rom", False))
-        self.chk_usa_var = _StaticVar(not getattr(args, "no_usa", False))
-        self.chk_world_var = _StaticVar(not getattr(args, "no_world", False))
-        self.chk_eur_var = _StaticVar(not getattr(args, "no_europe", False))
-        self.chk_jpn_var = _StaticVar(not getattr(args, "no_japan", False))
+        self.chk_1g1r_var = _StaticVar(
+            getattr(args, "one_game_one_rom", False) or opt("OneGameOneRom", False))
+        self.chk_usa_var = _StaticVar(
+            opt("RegionUSA", True) and not getattr(args, "no_usa", False))
+        self.chk_world_var = _StaticVar(
+            opt("RegionWorld", True) and not getattr(args, "no_world", False))
+        self.chk_eur_var = _StaticVar(
+            opt("RegionEurope", True) and not getattr(args, "no_europe", False))
+        self.chk_jpn_var = _StaticVar(
+            opt("RegionJapan", True) and not getattr(args, "no_japan", False))
 
         # Misc options
-        self.chk_zip_var = _StaticVar(getattr(args, "extract_zips", False))
-        self.chk_tags_var = _StaticVar(not getattr(args, "no_tags", False))
-        self.chk_backups_var = _StaticVar(not getattr(args, "no_backup", False))
-        self.chk_restore_var = _StaticVar(getattr(args, "restore", False))
-        self.chk_folders_last_var = _StaticVar(getattr(args, "folders_last", False))
-        self.chk_recent_var = _StaticVar(getattr(args, "sort_recent", False))
-        self.chk_fav_var = _StaticVar(getattr(args, "favorites", False))
-        self.chk_eject_var = _StaticVar(getattr(args, "eject", False))
+        self.chk_zip_var = _StaticVar(
+            getattr(args, "extract_zips", False) or opt("ExtractZips", False))
+        self.chk_tags_var = _StaticVar(
+            opt("KeepTags", True) and not getattr(args, "no_tags", False))
+        self.chk_backups_var = _StaticVar(
+            opt("Backups", True) and not getattr(args, "no_backup", False))
+        self.chk_restore_var = _StaticVar(
+            getattr(args, "restore", False) or opt("Restore", False))
+        self.chk_folders_last_var = _StaticVar(
+            getattr(args, "folders_last", False) or opt("FoldersLast", False))
+        self.chk_recent_var = _StaticVar(
+            getattr(args, "sort_recent", False) or opt("SortRecent", False))
+        self.chk_fav_var = _StaticVar(
+            getattr(args, "favorites", False) or opt("Favorites", False))
+        self.chk_eject_var = _StaticVar(
+            getattr(args, "eject", False) or opt("Eject", False))
+        self.chk_verify_var = _StaticVar(
+            getattr(args, "verify", False) or opt("VerifyWrites", False))
+        self.chk_orphans_var = _StaticVar(
+            getattr(args, "archive_orphans", False) or opt("ArchiveOrphans", False))
+        # Deliberately NOT read from saved config: a leftover GUI dry-run
+        # toggle silently turning every scripted sync into a no-op is worse
+        # than requiring the explicit flag.
         self.chk_dryrun_var = _StaticVar(getattr(args, "dry_run", False))
 
         # No-op UI stand-ins
@@ -92,10 +141,8 @@ class HeadlessApp(SyncApp):
 
         # Config (unused headlessly but avoids AttributeError on save_config)
         self.config_data = {
-            "Source": args.source or "",
-            "Hacks": args.hacks or "",
-            "GbcSysPayload": getattr(args, "gbcsys", "") or "",
-            "Dest": args.dest or "",
+            "Source": source, "Hacks": hacks, "GbcSysPayload": gbcsys,
+            "Dest": dest, "DatFile": dat,
         }
 
     # No-op overrides for every tkinter/UI call in the parent class ----------
@@ -146,7 +193,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source", help="Source ROM library folder")
     parser.add_argument("--hacks", help="ROM Hacks folder")
     parser.add_argument("--gbcsys", help="GBCSYS/GBOS payload folder")
-    parser.add_argument("--dest", required=True, help="SD card destination path")
+    parser.add_argument("--dest",
+                        help="SD card destination path (required unless"
+                             " --use-saved-config supplies it)")
+    parser.add_argument("--dat", help="No-Intro DAT file to verify ROM checksums against")
+    parser.add_argument("--use-saved-config", action="store_true",
+                        help="Load paths and options saved by the GUI; explicit flags"
+                             " override (--dry-run is never loaded from config)")
     parser.add_argument("--no-reorg", action="store_true", help="Disable auto-reorganise")
     parser.add_argument("--no-type", action="store_true",
                         help="Don't separate systems into GB/GBC/GBA/N64 folders")
@@ -169,6 +222,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         help="Sort hack/recent folders by date added instead of name")
     parser.add_argument("--favorites", action="store_true",
                         help="Prefix games listed in favorites.txt with '!'")
+    parser.add_argument("--verify", action="store_true",
+                        help="Verify every file written to the SD card (slower, safer)")
+    parser.add_argument("--archive-orphans", action="store_true",
+                        help="Move orphaned SD saves into the PC backup instead of warning")
     parser.add_argument("--restore", action="store_true", help="Restore saves from PC to SD")
     parser.add_argument("--eject", action="store_true", help="Eject SD card after sync")
     parser.add_argument("--dry-run", action="store_true", help="Preview only — no changes made")
@@ -181,10 +238,10 @@ def run_cli(argv=None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     headless_app = HeadlessApp(args)
-    headless_app.run_sync(
-        source=args.source,
-        hacks=args.hacks,
-        gbcsys=getattr(args, "gbcsys", None),
-        dest=args.dest,
-    )
+    if not headless_app.txt_dest.get().strip():
+        parser.error("--dest is required (or save a Dest in the GUI and"
+                     " pass --use-saved-config)")
+    # No explicit args: HeadlessApp already merged CLI flags with any saved
+    # config, and run_sync falls back to reading the entry stand-ins.
+    headless_app.run_sync()
     return 1 if getattr(headless_app, "had_error", False) else 0
