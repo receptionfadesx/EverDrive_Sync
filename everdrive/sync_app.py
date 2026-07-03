@@ -55,7 +55,9 @@ class SyncApp(ctk.CTk):
         super().__init__()
         self.title("Sync Tool for EverDrive (GB/GBA/64)")
         self.geometry("600x920")
-        self.resizable(False, False)
+        # Allow vertical resizing so the window still fits on 768p screens
+        self.resizable(False, True)
+        self.minsize(600, 600)
 
         self.config_data = {
             "Source": "", "Hacks": "", "GbcSysPayload": "", "Dest": ""
@@ -348,6 +350,9 @@ class SyncApp(ctk.CTk):
         self.log_msg("Cancelling sync after the current file...")
 
     def start_sync_thread(self):
+        # Disable the button synchronously — toggle_ui(False) is scheduled from
+        # the worker, leaving a window where a double-click starts two syncs.
+        self.btn_start.configure(state="disabled")
         self.save_config()
         self.txt_log.configure(state="normal")
         self.txt_log.delete("0.0", "end")
@@ -387,6 +392,7 @@ class SyncApp(ctk.CTk):
                 key=lambda c: (c.is_folder != folder_sort_desc, c.name.lower())
             )
 
+        seen_targets = set()
         for child in sorted_child:
             check_cancel(self)
             target_name = child.name
@@ -402,6 +408,16 @@ class SyncApp(ctk.CTk):
                         target_name = base[:allowed_chars - len(ext)] + ext
                 elif allowed_chars > 0:
                     target_name = target_name[:allowed_chars]
+
+            # FAT32 is case-insensitive, and truncation above can collide two
+            # siblings — uniquify files so one doesn't overwrite the other.
+            if not child.is_folder and target_name.lower() in seen_targets:
+                base, ext = os.path.splitext(target_name)
+                n = 1
+                while f"{base}~{n}{ext}".lower() in seen_targets:
+                    n += 1
+                target_name = f"{base}~{n}{ext}"
+            seen_targets.add(target_name.lower())
 
             target_path = os.path.join(current_dest, target_name)
 
@@ -453,9 +469,12 @@ class SyncApp(ctk.CTk):
                 return
             os.remove(target_path)
 
-        # Check if exists elsewhere on SD for a quick move (size+mtime
-        # match, so it works even if the file was renamed on the SD)
-        existing_path = catalog_pop_match(sd_catalog, source_stat.st_size, source_stat.st_mtime)
+        # Check if exists elsewhere on SD for a quick move (size+mtime plus a
+        # content sample, so renamed files are found but two different ROMs
+        # that share size+mtime are never swapped)
+        existing_path = catalog_pop_match(
+            sd_catalog, source_stat.st_size, source_stat.st_mtime, child.source_path
+        )
         if existing_path:
             if dry_run:
                 self.log_msg(f" -> [DRY RUN] Would move (local): {child.name}")
@@ -543,7 +562,10 @@ class SyncApp(ctk.CTk):
                         os.makedirs(os.path.dirname(target_path), exist_ok=True)
                         shutil.copy2(src_file, target_path)
                     restored_files.append(target_path)
-        self.log_msg(f"Restored {len(restored_files)} files.")
+        if dry_run:
+            self.log_msg(f"[DRY RUN] Would restore {len(restored_files)} files.")
+        else:
+            self.log_msg(f"Restored {len(restored_files)} files.")
 
     @staticmethod
     def _restore_target_path(f, rel_path, dest, os_folder, save_base, rtc_base):
@@ -608,16 +630,31 @@ class SyncApp(ctk.CTk):
     # Save rename helpers                                                   #
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _fav_prefixed(name: str, favs) -> str:
+        """Return name with the favorites '! ' prefix when its title is a favorite.
+
+        Keeps save filenames in lockstep with the prefixed ROM filename so the
+        EverDrive OS still pairs them."""
+        if favs and get_fuzzy_title(os.path.splitext(name)[0]) in favs:
+            return "! " + name
+        return name
+
     def rename_sd_saves(
-        self, dest: str, os_folder: str, save_base: str, rtc_base: str, rom_name_map: dict
+        self, dest: str, os_folder: str, save_base: str, rtc_base: str,
+        rom_name_map: dict, favs=None
     ) -> None:
         """Rename existing saves on the SD card to match current ROM naming settings."""
         if os_folder.lower() == "edgba":
-            SyncApp._rename_gba_pro_saves(self, dest, os_folder, rom_name_map)
+            SyncApp._rename_gba_pro_saves(self, dest, os_folder, rom_name_map, favs)
         else:
-            SyncApp._rename_standard_saves(self, dest, os_folder, save_base, rtc_base, rom_name_map)
+            SyncApp._rename_standard_saves(
+                self, dest, os_folder, save_base, rtc_base, rom_name_map, favs
+            )
 
-    def _rename_gba_pro_saves(self, dest: str, os_folder: str, rom_name_map: dict) -> None:
+    def _rename_gba_pro_saves(
+        self, dest: str, os_folder: str, rom_name_map: dict, favs=None
+    ) -> None:
         gamedata_path = os.path.join(dest, os_folder, "gamedata")
         if not os.path.isdir(gamedata_path):
             return
@@ -635,13 +672,13 @@ class SyncApp(ctk.CTk):
             matched = SyncApp._fuzzy_match_rom(clean_stem, rom_name_map)
             if not matched:
                 continue
-            new_folder_name = matched + ".gba"
+            new_folder_name = SyncApp._fav_prefixed(matched + ".gba", favs)
             for f in os.listdir(item_path):
                 f_path = os.path.join(item_path, f)
                 if os.path.isfile(f_path):
                     f_stem, f_ext = os.path.splitext(f)
                     if f_stem.lower() == stem.lower():
-                        new_f_name = matched + f_ext
+                        new_f_name = SyncApp._fav_prefixed(matched + f_ext, favs)
                         new_f_path = os.path.join(item_path, new_f_name)
                         if not os.path.exists(new_f_path):
                             if getattr(self, "dry_run", False):
@@ -660,7 +697,8 @@ class SyncApp(ctk.CTk):
                         os.rename(item_path, new_folder_path)
 
     def _rename_standard_saves(
-        self, dest: str, os_folder: str, save_base: str, rtc_base: str, rom_name_map: dict
+        self, dest: str, os_folder: str, save_base: str, rtc_base: str,
+        rom_name_map: dict, favs=None
     ) -> None:
         sys_paths = [
             os.path.join(dest, os_folder, save_base),
@@ -681,7 +719,9 @@ class SyncApp(ctk.CTk):
                 if not clean_stem:
                     continue
                 matched = SyncApp._fuzzy_match_rom(clean_stem, rom_name_map)
-                new_name = (matched if matched else get_clean_rom_name(clean_stem)) + ext
+                new_name = SyncApp._fav_prefixed(
+                    (matched if matched else get_clean_rom_name(clean_stem)) + ext, favs
+                )
                 if f != new_name:
                     new_full = os.path.join(sp, new_name)
                     if not os.path.exists(new_full):
@@ -765,6 +805,20 @@ class SyncApp(ctk.CTk):
                 (hacks and os.path.realpath(hacks) == real_dest):
             self.show_error("Error", "Source and Dest cannot match.")
             return False
+        # A source inside dest would be deleted by clean_sd; a dest inside
+        # source would be rescanned as ROM input. Refuse both.
+        for label, p in (("Source", source), ("ROM Hacks", hacks)):
+            if not p:
+                continue
+            real_p = os.path.realpath(p)
+            if SyncApp._path_contains(real_dest, real_p) or \
+                    SyncApp._path_contains(real_p, real_dest):
+                self.show_error(
+                    "Error",
+                    f"{label} and Dest cannot be nested inside each other —"
+                    " a sync could delete or rescan its own files."
+                )
+                return False
         if not self._confirm_dest_safe(dest, real_dest):
             return False
         has_os = any(
@@ -775,6 +829,13 @@ class SyncApp(ctk.CTk):
             self.show_error("Error", "Missing OS folder on SD.")
             return False
         return True
+
+    @staticmethod
+    def _path_contains(parent, child):
+        try:
+            return os.path.commonpath([parent, child]) == parent
+        except ValueError:
+            return False
 
     def _confirm_dest_safe(self, dest, real_dest) -> bool:
         """Warn and confirm if dest looks like a system or dangerous path."""
@@ -836,13 +897,22 @@ class SyncApp(ctk.CTk):
                 new_entries = []
                 for mtime, path in entries:
                     if os.path.exists(path):
+                        # Files already staged by an interrupted previous sync
+                        # stay where they are.
+                        if os.path.dirname(path) == temp_sd_dir:
+                            new_entries.append((mtime, path))
+                            continue
                         ext = os.path.splitext(path)[1]
-                        temp_file_name = f"temp_{file_counter}{ext}"
-                        temp_file_path = os.path.join(temp_sd_dir, temp_file_name)
+                        while True:
+                            temp_file_path = os.path.join(
+                                temp_sd_dir, f"temp_{file_counter}{ext}"
+                            )
+                            file_counter += 1
+                            if not os.path.exists(temp_file_path):
+                                break
                         try:
                             shutil.move(path, temp_file_path)
                             new_entries.append((mtime, temp_file_path))
-                            file_counter += 1
                         except OSError as e:
                             self.log_msg(f"Warning: Could not move {path} to temp SD location: {e}")
                 if new_entries:
@@ -1025,6 +1095,8 @@ class SyncApp(ctk.CTk):
             rom_name_map[get_fuzzy_title(f.stem)] = clean_name
 
         for p in Path(hacks).rglob("*"):
+            if p.name.startswith("._") or p.name == ".DS_Store":
+                continue
             if p.is_file() and p.suffix.lower() not in (rom_exts | save_exts | {".zip"}):
                 rel = os.path.relpath(str(p), hacks)
                 hack_parts = ["[ROM Hacks]"] + rel.replace("\\", "/").split("/")
@@ -1040,21 +1112,20 @@ class SyncApp(ctk.CTk):
         if not clean_base:
             return
         matched_name = self._fuzzy_match_rom(clean_base, rom_name_map)
-        final_save_name = (
-            matched_name if matched_name else get_clean_rom_name(clean_base)
-        ) + final_ext
+        base_name = matched_name if matched_name else get_clean_rom_name(clean_base)
+        # Apply the favorites prefix here (not via add_to_virtual_tree) so the
+        # GBA Pro gamedata folder gets the same prefix as the save file.
+        final_save_name = SyncApp._fav_prefixed(base_name + final_ext, favs)
         if os_folder.lower() == "edgba":
-            rom_folder_name = (
-                matched_name if matched_name else get_clean_rom_name(clean_base)
-            ) + ".gba"
+            rom_folder_name = SyncApp._fav_prefixed(base_name + ".gba", favs)
             add_to_virtual_tree(
                 v_root, str(s.absolute()),
-                [os_folder, "gamedata", rom_folder_name, final_save_name], False, favs
+                [os_folder, "gamedata", rom_folder_name, final_save_name], False, None
             )
         else:
             save_sub = rtc_base if final_ext.lower() == ".rtc" else save_base
             add_to_virtual_tree(
-                v_root, str(s.absolute()), [os_folder, save_sub, final_save_name], False, favs
+                v_root, str(s.absolute()), [os_folder, save_sub, final_save_name], False, None
             )
 
     def _run_bypass_mode(
@@ -1163,6 +1234,8 @@ class SyncApp(ctk.CTk):
         for root, _, filenames in os.walk(gbcsys):
             check_cancel(self)
             for f in filenames:
+                if f.startswith("._") or f == ".DS_Store":
+                    continue
                 src_file = os.path.join(root, f)
                 rel_path = os.path.relpath(src_file, gbcsys)
                 target_path = os.path.join(target_os_dir, rel_path)
@@ -1204,11 +1277,12 @@ class SyncApp(ctk.CTk):
         else:
             rom_exts = {".gb", ".gbc"}
 
-        save_exts = {".sav", ".rtc", ".srm", ".fla", ".eep", ".sra"}
+        save_exts = set(SAVE_EXTS)
 
         self.after(0, lambda: self.toggle_ui(False))
         temp_unzip_dir = None
         temp_sd_dir = None
+        sync_ok = False
         merged_name_map: Dict[str, str] = {}
         try:
             if self.dry_run:
@@ -1252,7 +1326,7 @@ class SyncApp(ctk.CTk):
                     return c
 
                 self.prog_max = max(1, count_files(v_root))
-                self.rename_sd_saves(dest, os_folder, save_base, rtc_base, merged_name_map)
+                self.rename_sd_saves(dest, os_folder, save_base, rtc_base, merged_name_map, favs)
                 self._log_orphaned_saves(
                     dest, os_folder, save_base, rtc_base, merged_name_map
                 )
@@ -1289,6 +1363,7 @@ class SyncApp(ctk.CTk):
                     self.show_info("Success", "Sync complete! SD card ejected — safe to remove.")
                 else:
                     self.show_info("Success", "Sync complete! Safely eject your SD card.")
+            sync_ok = True
 
         except SyncCancelled:
             self.log_msg("Sync cancelled by user.")
@@ -1304,7 +1379,17 @@ class SyncApp(ctk.CTk):
             if temp_unzip_dir and os.path.exists(temp_unzip_dir):
                 shutil.rmtree(temp_unzip_dir)
             if temp_sd_dir and os.path.exists(temp_sd_dir):
-                shutil.rmtree(temp_sd_dir, ignore_errors=True)
+                if sync_ok:
+                    # Anything still staged here has no source counterpart —
+                    # removing it is the mirror-delete step.
+                    shutil.rmtree(temp_sd_dir, ignore_errors=True)
+                else:
+                    # Cancelled or failed: keep the staged ROMs so nothing on
+                    # the SD is lost — the next sync re-catalogs and reuses them.
+                    self.log_msg(
+                        "Kept staged files in '.sync_temp' on the SD card —"
+                        " they will be reused when you run the sync again."
+                    )
             if not self.dry_run and merged_name_map:
                 self._save_name_manifest(source, hacks, merged_name_map)
             self._write_sync_report(source, hacks)
@@ -1313,6 +1398,8 @@ class SyncApp(ctk.CTk):
 
     def _write_sync_report(self, source, hacks):
         """Persist the session log next to the save backups for post-sync auditing."""
+        if getattr(self, "dry_run", False):
+            return  # dry runs promise to touch nothing, including the log file
         lines = getattr(self, "session_log", None)
         if not lines:
             return
@@ -1403,7 +1490,13 @@ class SyncApp(ctk.CTk):
             if old_words and old_words in live_word_sets:
                 merged[old_fuzzy] = live_word_sets[old_words]
 
-        return merged
+        # Prune entries whose clean name no longer exists in the live library:
+        # keeps the manifest from growing forever and lets orphan detection
+        # fire for saves whose ROM was removed. (When live_map is empty the
+        # caller does not persist the empty result, so a bad scan can never
+        # wipe the manifest file.)
+        live_clean_names = set(live_map.values())
+        return {k: v for k, v in merged.items() if v in live_clean_names}
 
     def _save_name_manifest(
         self, source: str, hacks: str, manifest: Dict[str, str]
@@ -1474,7 +1567,9 @@ class SyncApp(ctk.CTk):
                 self.log_msg("Filesystem buffers flushed — unmount/eject the card manually.")
             elif sysname == "Windows":
                 drive = os.path.splitdrive(dest)[0]
-                if drive:
+                # Only plain drive letters — never interpolate arbitrary
+                # path text into the PowerShell command below.
+                if drive and re.fullmatch(r"[A-Za-z]:", drive):
                     self.log_msg(f"Ejecting drive {drive}...")
                     ps_cmd = [
                         "powershell", "-NoProfile", "-Command",

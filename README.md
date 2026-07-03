@@ -46,7 +46,7 @@ EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alpha
 - **Cancel Button**: Safely stop a running sync after the current file finishes, instead of yanking the card mid-write.
 - **Headless CLI Mode**: Run syncs from the command line or scripts — `python sync_everdrive.py --source ~/ROMs --dest /Volumes/EVERDRIVE --yes` (see `--help` for all options, including `--dry-run`).
 - **Auto-Eject**: Optionally eject the SD card automatically after a successful sync (macOS).
-- **Sync Reports**: Every sync writes its full log to `Saves_Backup/last_sync.log` so you can audit what was changed afterwards.
+- **Sync Reports**: Every real sync writes its full log to `Saves_Backup/last_sync.log` so you can audit what was changed afterwards (dry runs write nothing, not even the log).
 
 ### 🌟 1:1 PowerShell Legacy Parity
 The Python logic engine has undergone a massive audit and is now **100% feature complete and 1:1 with the original advanced PowerShell script**. This includes edge cases like:

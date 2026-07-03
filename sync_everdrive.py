@@ -9,7 +9,7 @@ import sys
 from everdrive import (  # noqa: F401  # pylint: disable=unused-import
     CONFIG_FILE, SAVE_EXTS, BACKUP_SNAPSHOT_RE,
     SyncCancelled, check_cancel, mtimes_match,
-    catalog_pop_match, catalog_discard_path,
+    catalog_pop_match, catalog_discard_path, files_content_match,
     list_backup_snapshots, prune_backups,
     get_clean_rom_name, get_fuzzy_title,
     get_best_region_games, get_series_groups, KNOWN_SERIES,

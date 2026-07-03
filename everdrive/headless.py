@@ -65,25 +65,25 @@ class HeadlessApp(SyncApp):
 
         # Reorganise / structure
         self.chk_reorganize_var = _StaticVar(not getattr(args, "no_reorg", False))
-        self.chk_type_var = _StaticVar(True)
-        self.chk_series_var = _StaticVar(True)
+        self.chk_type_var = _StaticVar(not getattr(args, "no_type", False))
+        self.chk_series_var = _StaticVar(not getattr(args, "no_series", False))
         self.chk_az_var = _StaticVar(not getattr(args, "no_az", False))
 
         # 1G1R filter
         self.chk_1g1r_var = _StaticVar(getattr(args, "one_game_one_rom", False))
-        self.chk_usa_var = _StaticVar(True)
-        self.chk_world_var = _StaticVar(True)
-        self.chk_eur_var = _StaticVar(True)
-        self.chk_jpn_var = _StaticVar(True)
+        self.chk_usa_var = _StaticVar(not getattr(args, "no_usa", False))
+        self.chk_world_var = _StaticVar(not getattr(args, "no_world", False))
+        self.chk_eur_var = _StaticVar(not getattr(args, "no_europe", False))
+        self.chk_jpn_var = _StaticVar(not getattr(args, "no_japan", False))
 
         # Misc options
         self.chk_zip_var = _StaticVar(getattr(args, "extract_zips", False))
-        self.chk_tags_var = _StaticVar(True)
+        self.chk_tags_var = _StaticVar(not getattr(args, "no_tags", False))
         self.chk_backups_var = _StaticVar(not getattr(args, "no_backup", False))
         self.chk_restore_var = _StaticVar(getattr(args, "restore", False))
-        self.chk_folders_last_var = _StaticVar(False)
-        self.chk_recent_var = _StaticVar(False)
-        self.chk_fav_var = _StaticVar(False)
+        self.chk_folders_last_var = _StaticVar(getattr(args, "folders_last", False))
+        self.chk_recent_var = _StaticVar(getattr(args, "sort_recent", False))
+        self.chk_fav_var = _StaticVar(getattr(args, "favorites", False))
         self.chk_eject_var = _StaticVar(getattr(args, "eject", False))
         self.chk_dryrun_var = _StaticVar(getattr(args, "dry_run", False))
 
@@ -148,11 +148,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gbcsys", help="GBCSYS/GBOS payload folder")
     parser.add_argument("--dest", required=True, help="SD card destination path")
     parser.add_argument("--no-reorg", action="store_true", help="Disable auto-reorganise")
+    parser.add_argument("--no-type", action="store_true",
+                        help="Don't separate systems into GB/GBC/GBA/N64 folders")
+    parser.add_argument("--no-series", action="store_true",
+                        help="Disable automatic series folders")
     parser.add_argument("--1g1r", dest="one_game_one_rom", action="store_true",
                         help="Apply 1G1R region filter")
+    parser.add_argument("--no-usa", action="store_true", help="1G1R: exclude USA region")
+    parser.add_argument("--no-world", action="store_true", help="1G1R: exclude World region")
+    parser.add_argument("--no-europe", action="store_true", help="1G1R: exclude Europe region")
+    parser.add_argument("--no-japan", action="store_true", help="1G1R: exclude Japan region")
     parser.add_argument("--extract-zips", action="store_true", help="Extract zip archives")
+    parser.add_argument("--no-tags", action="store_true",
+                        help="Strip No-Intro tags like (USA) from ROM names")
     parser.add_argument("--no-backup", action="store_true", help="Skip save backup")
     parser.add_argument("--no-az", action="store_true", help="Disable A-Z sub-folders")
+    parser.add_argument("--folders-last", action="store_true",
+                        help="Sort folders after game files in each menu")
+    parser.add_argument("--sort-recent", action="store_true",
+                        help="Sort hack/recent folders by date added instead of name")
+    parser.add_argument("--favorites", action="store_true",
+                        help="Prefix games listed in favorites.txt with '!'")
     parser.add_argument("--restore", action="store_true", help="Restore saves from PC to SD")
     parser.add_argument("--eject", action="store_true", help="Eject SD card after sync")
     parser.add_argument("--dry-run", action="store_true", help="Preview only — no changes made")

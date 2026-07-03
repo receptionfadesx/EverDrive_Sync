@@ -147,6 +147,7 @@ from sync_everdrive import SyncApp
 class MockSyncApp(SyncApp):
     def __init__(self, source="", dest="", hacks="", gbcsys="", backups=False, zip=False, fav=False, reorg=True, usa=True, world=True, eur=True, jpn=True, series=False, type_folders=True, az=False, tags=True, restore=False, folders_last=False, recent=False, dryrun=False, eject=False):
         self.logs = []
+        self.session_log = self.logs  # same list: exercises the sync-report path
         self.prog_max = 1
         self.cancel_event = threading.Event()
         self.config_data = {
@@ -608,8 +609,11 @@ def test_sync_validation_errors(tmp_path):
         mock_error.assert_called_with("Error", "Source and Dest cannot match.")
         mock_error.reset_mock()
         
-        # 4. Missing EverDrive OS folder
-        app = MockSyncApp(source=str(tmp_path), dest=str(dest))
+        # 4. Missing EverDrive OS folder (source must be a sibling — nested
+        # source/dest paths are rejected earlier with their own error)
+        plain_source = tmp_path / "plain_source"
+        plain_source.mkdir()
+        app = MockSyncApp(source=str(plain_source), dest=str(dest))
         app.run_sync()
         mock_error.assert_called_with("Error", "Missing OS folder on SD.")
 
@@ -967,6 +971,315 @@ def test_name_manifest_orphan_detection(tmp_path):
     assert any("orphaned" in line.lower() or "no matching rom" in line.lower()
                for line in app.logs), \
         f"Expected orphan warning in logs; got:\n" + "\n".join(app.logs)
+
+
+# ------------------------------------------------------------------ #
+# Safety & correctness regression tests                                 #
+# ------------------------------------------------------------------ #
+
+def test_validation_rejects_nested_paths(tmp_path):
+    """Source inside dest (or vice versa) must be refused — clean_sd would
+    otherwise delete the source library."""
+    dest = tmp_path / "sd_card"
+    (dest / "EDGB").mkdir(parents=True)
+    inner_source = dest / "ROMs"
+    inner_source.mkdir()
+    (inner_source / "Game.gbc").write_text("rom")
+
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        # Source inside dest
+        app = MockSyncApp(source=str(inner_source), dest=str(dest))
+        app.run_sync()
+        assert "nested" in mock_error.call_args[0][1]
+        assert (inner_source / "Game.gbc").exists(), "source library was touched!"
+        mock_error.reset_mock()
+
+        # Dest inside source
+        app = MockSyncApp(source=str(tmp_path), dest=str(dest))
+        app.run_sync()
+        assert "nested" in mock_error.call_args[0][1]
+
+
+def test_catalog_pop_match_verifies_content(tmp_path):
+    from sync_everdrive import catalog_pop_match
+    src = tmp_path / "source_rom.gb"
+    wrong = tmp_path / "wrong.gb"
+    right = tmp_path / "right.gb"
+    src.write_text("GAME B DATA")
+    wrong.write_text("GAME A DATA")  # same size + mtime, different game
+    right.write_text("GAME B DATA")
+    size = src.stat().st_size
+
+    catalog = {size: [(1000, str(wrong)), (1000, str(right))]}
+    assert catalog_pop_match(catalog, size, 1000, str(src)) == str(right)
+    assert catalog[size] == [(1000, str(wrong))]
+    # Without a source path the old size+mtime behavior is unchanged
+    catalog2 = {size: [(1000, str(wrong))]}
+    assert catalog_pop_match(catalog2, size, 1000) == str(wrong)
+
+
+def test_same_size_mtime_roms_not_swapped(tmp_path):
+    """Two different ROMs sharing size+mtime must not be swapped by the
+    quick-move optimization."""
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+
+    t = 1_700_000_000
+    (source / "Alpha.gbc").write_text("AAAA")
+    (source / "Beta.gbc").write_text("BBBB")
+    os.utime(source / "Alpha.gbc", (t, t))
+    os.utime(source / "Beta.gbc", (t, t))
+
+    # Same contents already on the SD under scrambled names
+    old = dest / "Old"
+    old.mkdir()
+    (old / "aaa.gbc").write_text("BBBB")
+    (old / "zzz.gbc").write_text("AAAA")
+    os.utime(old / "aaa.gbc", (t, t))
+    os.utime(old / "zzz.gbc", (t, t))
+
+    app = MockSyncApp(source=str(source), dest=str(dest))
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    assert (dest / "GBC" / "Alpha.gbc").read_text() == "AAAA"
+    assert (dest / "GBC" / "Beta.gbc").read_text() == "BBBB"
+
+
+def test_cancel_preserves_staged_sync_temp(tmp_path):
+    """Cancelling after ROMs were staged into .sync_temp must not delete them,
+    and the next sync must recover them via a local move."""
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+
+    t = 1_700_000_000
+    (source / "Game.gbc").write_text("rom data")
+    os.utime(source / "Game.gbc", (t, t))
+    sd_rom = dest / "GBC" / "Game.gbc"
+    sd_rom.parent.mkdir()
+    sd_rom.write_text("rom data")
+    os.utime(sd_rom, (t, t))
+
+    app = MockSyncApp(source=str(source), dest=str(dest))
+
+    def cancel_now(*_a, **_k):
+        raise SyncCancelled()
+    app.clean_sd = cancel_now  # fires right after staging
+
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror'), \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+
+    temp = dest / ".sync_temp"
+    staged = list(temp.glob("*.gbc"))
+    assert staged, ".sync_temp was deleted on cancel — staged ROMs lost"
+    assert staged[0].read_text() == "rom data"
+
+    # Recovery sync: staged file is found via the catalog and moved back
+    app2 = MockSyncApp(source=str(source), dest=str(dest))
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app2.run_sync()
+        mock_error.assert_not_called()
+
+    assert (dest / "GBC" / "Game.gbc").read_text() == "rom data"
+    assert not temp.exists()
+    assert any("Moving (Local)" in line for line in app2.logs)
+
+
+def test_favorites_save_rename_gets_prefix(tmp_path):
+    """SD saves of favorite games get the same '! ' prefix as the ROM."""
+    dest = tmp_path / "sd_card"
+    (dest / "EDGB" / "SAVE").mkdir(parents=True)
+    (dest / "EDGB" / "SAVE" / "Zelda.sav").write_text("save")
+
+    app = DummyApp()
+    from sync_everdrive import SyncApp
+    favs = {"zelda"}
+    SyncApp.rename_sd_saves(app, str(dest), "EDGB", "SAVE", "RTC", {"zelda": "Zelda"}, favs)
+    assert (dest / "EDGB" / "SAVE" / "! Zelda.sav").exists()
+
+    # Idempotent: a second pass must not double-prefix
+    SyncApp.rename_sd_saves(app, str(dest), "EDGB", "SAVE", "RTC", {"zelda": "Zelda"}, favs)
+    assert (dest / "EDGB" / "SAVE" / "! Zelda.sav").exists()
+    assert not (dest / "EDGB" / "SAVE" / "! ! Zelda.sav").exists()
+
+    # Favorite removed: prefix comes off again
+    SyncApp.rename_sd_saves(app, str(dest), "EDGB", "SAVE", "RTC", {"zelda": "Zelda"}, set())
+    assert (dest / "EDGB" / "SAVE" / "Zelda.sav").exists()
+
+
+def test_favorites_end_to_end_rom_and_save_prefixed(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB" / "SAVE").mkdir(parents=True)
+
+    (source / "Zelda.gbc").write_text("rom")
+    (source / "favorites.txt").write_text("Zelda\n")
+    (dest / "EDGB" / "SAVE" / "Zelda.sav").write_text("save data")
+
+    app = MockSyncApp(source=str(source), dest=str(dest), fav=True)
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    assert (dest / "GBC" / "! Zelda.gbc").exists()
+    assert (dest / "EDGB" / "SAVE" / "! Zelda.sav").exists(), \
+        "save prefix out of sync with ROM prefix — EverDrive would start a blank save"
+
+
+def test_snap_files_routed_to_save_folder(tmp_path):
+    """.snap files from the source belong in the OS save folder, not loose on the card."""
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+
+    (source / "Game.gbc").write_text("rom")
+    (source / "Game.snap").write_text("snapshot")
+
+    app = MockSyncApp(source=str(source), dest=str(dest))
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    assert (dest / "EDGB" / "SAVE" / "Game.snap").exists()
+    assert not (dest / "Game.snap").exists()
+
+
+def test_dry_run_writes_no_report(tmp_path):
+    """Dry runs must not create Saves_Backup/last_sync.log either."""
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+    (source / "Game.gbc").write_text("rom")
+
+    app = MockSyncApp(source=str(source), dest=str(dest), dryrun=True)
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror'), \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+
+    assert not (source / "Saves_Backup").exists()
+
+
+def test_hacks_junk_files_not_copied(tmp_path):
+    source = tmp_path / "source"
+    hacks = tmp_path / "hacks"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    hacks.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+
+    (source / "Game.gbc").write_text("rom")
+    (hacks / "Mario Fire Red.gbc").write_text("hack rom")
+    (hacks / ".DS_Store").write_text("junk")
+    (hacks / "._Mario Fire Red.gbc").write_text("junk")
+
+    app = MockSyncApp(source=str(source), dest=str(dest), hacks=str(hacks))
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    assert (dest / "[ROM Hacks]" / "Mario Fire Red.gbc").exists()
+    assert not list(Path(dest).rglob(".DS_Store"))
+    assert not list(Path(dest).rglob("._*"))
+
+
+def test_truncated_name_collision_gets_uniquified(tmp_path):
+    """Two files whose names collide after MAX_PATH truncation must both survive."""
+    app = MockSyncApp()
+    shared = "Really Long Shared Prefix " * 3
+    f1 = tmp_path / (shared + "Edition One.gb")
+    f2 = tmp_path / (shared + "Edition Two.gb")
+    f1.write_text("1")
+    f2.write_text("2")
+
+    # Deep dest dir so the projected path exceeds the 240-char guard
+    pad = max(1, 225 - len(str(tmp_path)))
+    deep = tmp_path / ("d" * min(pad, 200))
+    deep.mkdir()
+
+    root = VirtualNode("", True)
+    add_to_virtual_tree(root, str(f1), [f1.name], False)
+    add_to_virtual_tree(root, str(f2), [f2.name], False)
+    app.copy_virtual_tree(root, str(deep), {}, False, False)
+
+    files = list(deep.iterdir())
+    assert len(files) == 2, "truncation collision silently dropped a file"
+    assert sorted(p.read_text() for p in files) == ["1", "2"]
+
+
+def test_cli_flags_cover_every_gui_checkbox():
+    from sync_everdrive import build_arg_parser, HeadlessApp
+    args = build_arg_parser().parse_args([
+        "--dest", "/nonexistent/sd",
+        "--no-reorg", "--no-type", "--no-series", "--no-az",
+        "--1g1r", "--no-usa", "--no-world", "--no-europe", "--no-japan",
+        "--extract-zips", "--no-tags", "--no-backup", "--restore",
+        "--folders-last", "--sort-recent", "--favorites",
+        "--eject", "--dry-run", "--yes",
+    ])
+    app = HeadlessApp(args)
+    assert app.chk_reorganize_var.get() is False
+    assert app.chk_type_var.get() is False
+    assert app.chk_series_var.get() is False
+    assert app.chk_az_var.get() is False
+    assert app.chk_1g1r_var.get() is True
+    assert app.chk_usa_var.get() is False
+    assert app.chk_world_var.get() is False
+    assert app.chk_eur_var.get() is False
+    assert app.chk_jpn_var.get() is False
+    assert app.chk_zip_var.get() is True
+    assert app.chk_tags_var.get() is False
+    assert app.chk_backups_var.get() is False
+    assert app.chk_restore_var.get() is True
+    assert app.chk_folders_last_var.get() is True
+    assert app.chk_recent_var.get() is True
+    assert app.chk_fav_var.get() is True
+    assert app.chk_eject_var.get() is True
+    assert app.chk_dryrun_var.get() is True
+
+
+def test_manifest_prunes_stale_entries():
+    """Manifest entries for ROMs no longer in the library are dropped."""
+    from sync_everdrive import SyncApp
+    live = {"mario": "Mario"}
+    persisted = {"mario": "Mario", "long gone game": "Long Gone Game"}
+    merged = SyncApp._build_merged_name_map(live, persisted)
+    assert "long gone game" not in merged
+    assert merged["mario"] == "Mario"
 
 
 def test_name_manifest_word_anagram_propagation():

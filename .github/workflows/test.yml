@@ -2,7 +2,7 @@ name: Run Tests
 
 on:
   push:
-    branches: [ main, "feature/*" ]
+    branches: [ main, "feature/*", "claude/*", "fix/*", "refactor/*" ]
     paths:
       - "**.py"
       - "requirements.txt"
@@ -16,8 +16,12 @@ on:
 
 jobs:
   test:
-    name: Run Pytest
-    runs-on: windows-2022
+    name: Run Pytest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-latest, macos-latest]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
