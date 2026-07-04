@@ -34,6 +34,7 @@ EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alpha
   - Un-nests trailing suffixes. Restructures titles like *"The Legend of Zelda"* to *"Legend of Zelda, The"* for perfect alphabetical sorting.
   - Cleans up cluttered No-Intro tags such as `(Rev A)`, `(USA, Europe)`, and `[!]`.
   - Normalizes accents (e.g., *Pokémon* -> *Pokemon*) to guarantee reliable matching and filesystem safety.
+  - Replaces characters FAT32 can't store (`: ? * " < > |` etc.) so files named on macOS/Linux always copy cleanly to the SD card.
 - **Integrated `.zip` Extraction**: Can seamlessly extract `.gb` or `.gbc` ROMs directly from `.zip` archives during the sync process.
 - **Dedicated ROM Hacks Support**: Treat ROM hacks as first-class citizens. Keeps them properly sorted with their own saves without clashing with base games.
 - **Save File & RTC Management**:
@@ -43,10 +44,15 @@ EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alpha
   - Routes save files into the correct hardware directory (e.g., `GBCSYS/SAVE`, `EDGB/SAVE`, `ED64/SAVE`, or GBA Pro's nested `edgba/gamedata` structure).
   - **Auto-renames existing saves on the SD card** to guarantee they match new ROM naming conventions (with safety guards protecting titles like *"Save the World"* or *"GBA Explorer"* from incorrect prefix stripping).
 - **Dry Run Mode**: Preview exactly what a sync would copy, move, rename, or delete — without touching a single file. Perfect for a first run on a new SD card.
+- **Free-Space Pre-Flight**: Refuses to start a sync the SD card can't hold, instead of failing halfway through with a full card.
+- **Verify Writes**: Optional read-back verification of every file written to the SD card — catches silent corruption from failing or counterfeit cards.
+- **Orphaned Save Handling**: Warns about saves whose ROM no longer exists; optionally archives them into the PC backup (`Saves_Backup/Orphaned/`) instead of leaving them stranded on the card.
+- **No-Intro DAT Verification**: Point the tool at a Logiqx `.dat` file and every source ROM's CRC32 is checked against it during the sync — modified, corrupt, or duplicate ROMs are called out in the log.
+- **End-of-Sync Summary**: One closing line with totals — files copied (and MB written), moved, removed, renamed — so big syncs can be sanity-checked at a glance.
 - **Cancel Button**: Safely stop a running sync after the current file finishes, instead of yanking the card mid-write.
 - **Headless CLI Mode**: Run syncs from the command line or scripts — `python sync_everdrive.py --source ~/ROMs --dest /Volumes/EVERDRIVE --yes` (see `--help` for all options, including `--dry-run`).
 - **Auto-Eject**: Optionally eject the SD card automatically after a successful sync (macOS).
-- **Sync Reports**: Every sync writes its full log to `Saves_Backup/last_sync.log` so you can audit what was changed afterwards.
+- **Sync Reports**: Every real sync writes its full log to `Saves_Backup/last_sync.log` so you can audit what was changed afterwards (dry runs write nothing, not even the log).
 
 ### 🌟 1:1 PowerShell Legacy Parity
 The Python logic engine has undergone a massive audit and is now **100% feature complete and 1:1 with the original advanced PowerShell script**. This includes edge cases like:
@@ -101,6 +107,12 @@ python sync_everdrive.py --source ~/ROMs --dest /Volumes/EVERDRIVE --dry-run --y
 
 # Full sync, then eject the card
 python sync_everdrive.py --source ~/ROMs --dest /Volumes/EVERDRIVE --eject --yes
+
+# Reuse the paths and options you saved in the GUI (flags still override)
+python sync_everdrive.py --use-saved-config --yes
+
+# Verify writes and check ROMs against a No-Intro DAT
+python sync_everdrive.py --source ~/ROMs --dest /Volumes/EVERDRIVE --verify --dat ~/no-intro_gbc.dat --yes
 ```
 
 Run `python sync_everdrive.py --help` for the full list of options (every GUI checkbox has a CLI flag).

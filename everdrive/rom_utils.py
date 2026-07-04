@@ -6,6 +6,21 @@ import itertools
 from pathlib import Path
 
 
+# Characters FAT32 cannot store in filenames (plus control chars)
+_FAT32_INVALID_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def sanitize_fat32(name):
+    """Make a file/folder name safe for FAT32 SD cards.
+
+    Source filesystems (ext4, APFS) allow characters like ':' and '?' that
+    FAT32 rejects, which would make the copy fail mid-sync."""
+    cleaned = name.replace(':', ' -')
+    cleaned = _FAT32_INVALID_RE.sub('-', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip().rstrip('. ')
+    return cleaned if cleaned else "_"
+
+
 def get_clean_rom_name(base_name, preserve_tags=False):
     clean = base_name
     suffix = ""
@@ -19,6 +34,7 @@ def get_clean_rom_name(base_name, preserve_tags=False):
     # Strip accents
     clean = unicodedata.normalize('NFKD', clean).encode('ascii', 'ignore').decode('ascii')
 
+    clean = sanitize_fat32(clean)
     clean = re.sub(r'_+', ' ', clean)
     clean = re.sub(r'\s+', ' ', clean).strip()
 
