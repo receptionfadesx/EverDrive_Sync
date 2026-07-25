@@ -56,19 +56,27 @@ def _stat_bump(instance, key, n=1):
         stats[key] = stats.get(key, 0) + n
 
 
+def _files_equal(src, dst):
+    # filecmp.cmp caches by (path, size, mtime) — copy2 preserves mtime, so a
+    # retried copy gets the same cache key and the stale verdict, and a later
+    # sync in the same process could reuse a stale pass. Always re-read.
+    filecmp.clear_cache()
+    return filecmp.cmp(src, dst, shallow=False)
+
+
 def _copy_verified(instance, src, dst):
     """copy2 with optional read-back verification (SD cards corrupt silently)."""
     shutil.copy2(src, dst)
     if not getattr(instance, "verify_writes", False):
         return
-    if filecmp.cmp(src, dst, shallow=False):
+    if _files_equal(src, dst):
         return
     try:
         os.remove(dst)
     except OSError:
         pass
     shutil.copy2(src, dst)  # one retry before giving up
-    if not filecmp.cmp(src, dst, shallow=False):
+    if not _files_equal(src, dst):
         raise OSError(
             f"Verification failed after copying '{os.path.basename(dst)}'"
             " — the SD card may be failing or counterfeit."

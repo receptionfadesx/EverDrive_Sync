@@ -1405,6 +1405,47 @@ def test_verify_writes_detects_corruption(tmp_path):
     assert "Verification failed" in mock_error.call_args[0][1]
 
 
+def test_verify_writes_retry_recovers_from_transient_corruption(tmp_path):
+    """A corrupt first write followed by a clean retry must pass verification.
+
+    Regression: filecmp.cmp caches results by (path, size, mtime) and copy2
+    preserves mtime, so the retried copy reused the stale cached False and
+    the sync failed even though the retry had produced a good file. Same-size
+    corruption is required to reproduce it — a size change alters the cache key.
+    """
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+    (source / "Game.gbc").write_text("rom data")
+
+    import shutil as _shutil
+    real_copy2 = _shutil.copy2
+    calls = {"n": 0}
+
+    def flaky_copy2(src, dst, **kwargs):
+        real_copy2(src, dst, **kwargs)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            with open(dst, "r+b") as fh:
+                fh.write(b"X")  # flip a byte, keep the size
+            st = os.stat(src)
+            os.utime(dst, ns=(st.st_atime_ns, st.st_mtime_ns))
+
+    app = MockSyncApp(source=str(source), dest=str(dest), verify=True)
+    from unittest.mock import patch
+    with patch('everdrive.sync_app.shutil.copy2', side_effect=flaky_copy2), \
+         patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+
+    mock_error.assert_not_called()
+    copied = [p for p in dest.rglob("*.gbc") if p.is_file()]
+    assert copied and copied[0].read_bytes() == b"rom data"
+
+
 def test_verify_writes_passes_clean_copy(tmp_path):
     source = tmp_path / "source"
     dest = tmp_path / "sd_card"
