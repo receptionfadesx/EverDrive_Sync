@@ -1,10 +1,10 @@
 """Headless (CLI) adapter — lets the sync engine run without a tkinter window."""
 # pylint: disable=missing-function-docstring,too-many-positional-arguments
 import argparse
-import json
 import threading
 
 from .constants import CONFIG_FILE
+from .profiles import blank_profile, get_profile, load_config_file, profile_names
 from .sync_app import SyncApp
 
 
@@ -33,6 +33,9 @@ class _StaticEntry:
     def insert(self, _index, value):
         self._value = value
 
+    def delete(self, _first, _last=None):
+        self._value = ""
+
 
 class _NullProgress:
     """No-op progress bar stand-in."""
@@ -51,7 +54,7 @@ class HeadlessApp(SyncApp):
     """CLI-friendly SyncApp that skips tkinter initialisation."""
     # pylint: disable=super-init-not-called
 
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args: argparse.Namespace, config: dict = None):
         self.cancel_event = threading.Event()
         self.session_log = []
         self.prog_max = 1
@@ -59,17 +62,17 @@ class HeadlessApp(SyncApp):
         self.had_error = False
         self._auto_yes = getattr(args, "yes", False)
 
-        # Optionally seed paths/options from the GUI's saved config; explicit
-        # CLI flags always win.
+        # Optionally seed paths/options from a saved GUI profile; explicit CLI
+        # flags always win. --profile picks one by name, --use-saved-config
+        # takes whichever profile the GUI last had active.
         cfg: dict = {}
-        if getattr(args, "use_saved_config", False):
-            try:
-                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    cfg = json.load(f)
-            except (OSError, json.JSONDecodeError):
-                cfg = {}
-            if not isinstance(cfg, dict):
-                cfg = {}
+        wanted = getattr(args, "profile", None)
+        if wanted or getattr(args, "use_saved_config", False):
+            if config is None:
+                config = load_config_file(CONFIG_FILE)
+            cfg = get_profile(config, wanted) or blank_profile()
+            self.active_profile = (
+                wanted or config.get("ActiveProfile") or self.active_profile)
         cfg_opts = cfg.get("Options") if isinstance(cfg.get("Options"), dict) else {}
 
         def opt(key, default):
@@ -142,7 +145,7 @@ class HeadlessApp(SyncApp):
         # Config (unused headlessly but avoids AttributeError on save_config)
         self.config_data = {
             "Source": source, "Hacks": hacks, "GbcSysPayload": gbcsys,
-            "Dest": dest, "DatFile": dat,
+            "Dest": dest, "DatFile": dat, "Options": dict(cfg_opts),
         }
 
     # No-op overrides for every tkinter/UI call in the parent class ----------
@@ -194,12 +197,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hacks", help="ROM Hacks folder")
     parser.add_argument("--gbcsys", help="GBCSYS/GBOS payload folder")
     parser.add_argument("--dest",
-                        help="SD card destination path (required unless"
-                             " --use-saved-config supplies it)")
+                        help="SD card destination path (required unless a profile"
+                             " supplies it, see --use-saved-config / --profile)")
     parser.add_argument("--dat", help="No-Intro DAT file to verify ROM checksums against")
     parser.add_argument("--use-saved-config", action="store_true",
-                        help="Load paths and options saved by the GUI; explicit flags"
-                             " override (--dry-run is never loaded from config)")
+                        help="Load paths and options from the profile the GUI last used;"
+                             " explicit flags override (--dry-run is never loaded"
+                             " from config)")
+    parser.add_argument("--profile", metavar="NAME",
+                        help="Load a saved profile by name (e.g. --profile N64);"
+                             " explicit flags still override its values")
+    parser.add_argument("--list-profiles", action="store_true",
+                        help="List saved profiles and exit")
     parser.add_argument("--no-reorg", action="store_true", help="Disable auto-reorganise")
     parser.add_argument("--no-type", action="store_true",
                         help="Don't separate systems into GB/GBC/GBA/N64 folders")
@@ -233,14 +242,36 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _print_profiles(config: dict) -> None:
+    active = config.get("ActiveProfile")
+    print("Saved profiles:")
+    for name in profile_names(config):
+        profile = config["Profiles"][name]
+        marker = "*" if name == active else " "
+        print(f" {marker} {name}")
+        print(f"     source: {profile.get('Source') or '(unset)'}")
+        print(f"     dest:   {profile.get('Dest') or '(unset)'}")
+    print("\n(* = profile the GUI last used, i.e. what --use-saved-config picks)")
+
+
 def run_cli(argv=None) -> int:
     """Run the sync in CLI/headless mode. Returns 0 on success, 1 on error."""
     parser = build_arg_parser()
     args = parser.parse_args(argv)
-    headless_app = HeadlessApp(args)
+    config = load_config_file(CONFIG_FILE)
+    if args.list_profiles:
+        _print_profiles(config)
+        return 0
+    if args.profile and args.profile not in config["Profiles"]:
+        parser.error(
+            f"unknown profile {args.profile!r}; saved profiles: "
+            + ", ".join(profile_names(config)))
+    headless_app = HeadlessApp(args, config)
+    if args.profile or args.use_saved_config:
+        print(f"Using profile: {headless_app.active_profile}")
     if not headless_app.txt_dest.get().strip():
-        parser.error("--dest is required (or save a Dest in the GUI and"
-                     " pass --use-saved-config)")
+        parser.error("--dest is required (or save a Dest in a GUI profile and pass"
+                     " --use-saved-config / --profile NAME)")
     # No explicit args: HeadlessApp already merged CLI flags with any saved
     # config, and run_sync falls back to reading the entry stand-ins.
     headless_app.run_sync()

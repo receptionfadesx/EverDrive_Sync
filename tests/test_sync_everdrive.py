@@ -559,19 +559,20 @@ def test_load_save_config(tmp_path):
     from unittest.mock import patch
     with patch('everdrive.sync_app.CONFIG_FILE', str(config_file)):
         app = MockSyncApp(source=source, dest=dest, hacks=hacks, gbcsys=gbcsys)
-        
+
         # Verify initial config saving
         app.save_config()
         assert config_file.exists()
-        
+
         import json
         with open(config_file, "r") as f:
             data = json.load(f)
-        assert data["Source"] == source
-        assert data["Dest"] == dest
-        assert data["Hacks"] == hacks
-        assert data["GbcSysPayload"] == gbcsys
-        
+        saved = data["Profiles"][data["ActiveProfile"]]
+        assert saved["Source"] == source
+        assert saved["Dest"] == dest
+        assert saved["Hacks"] == hacks
+        assert saved["GbcSysPayload"] == gbcsys
+
         # Test loading config
         app2 = MockSyncApp()
         # Mock widgets with empty entries
@@ -1326,9 +1327,10 @@ def test_gui_options_saved_and_restored(tmp_path):
         app = MockSyncApp(source="/s", dest="/d", fav=True, backups=False)
         app.save_config()
     data = _json.loads(config_file.read_text())
-    assert data["Options"]["Favorites"] is True
-    assert data["Options"]["Backups"] is False
-    assert "DatFile" in data
+    saved = data["Profiles"][data["ActiveProfile"]]
+    assert saved["Options"]["Favorites"] is True
+    assert saved["Options"]["Backups"] is False
+    assert "DatFile" in saved
 
     # Apply side: saved values land back on the checkbox variables
     from sync_everdrive import SyncApp
@@ -1633,3 +1635,187 @@ def test_name_manifest_word_anagram_propagation():
     assert result == "The Revenge", (
         f"Save rename after word-order change failed: got {result!r}, expected 'The Revenge'."
     )
+
+
+# ---------------------------------------------------------------------- #
+# Multi-system profiles                                                     #
+# ---------------------------------------------------------------------- #
+
+def _profile_app():
+    """SyncApp with stand-in widgets — exercises profile logic without tkinter."""
+    from everdrive.headless import _StaticEntry, _StaticVar
+    from sync_everdrive import SyncApp
+
+    class _ProfileApp(SyncApp):
+        # pylint: disable=super-init-not-called
+        def __init__(self):
+            for attr in ("txt_source", "txt_hacks", "txt_gbcsys", "txt_dest", "txt_dat"):
+                setattr(self, attr, _StaticEntry(""))
+            for _key, attr, default in SyncApp.OPTION_VARS:
+                setattr(self, attr, _StaticVar(default))
+            self.logs = []
+
+        def log_msg(self, msg):
+            self.logs.append(msg)
+
+        def toggle_reorg(self):
+            pass
+
+        def toggle_1g1r(self):
+            pass
+
+    return _ProfileApp()
+
+
+def test_legacy_flat_config_migrates_to_default_profile(tmp_path):
+    """A config written by the pre-profiles version keeps working after upgrade."""
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(_json.dumps({
+        "Source": "/old/roms", "Dest": "/Volumes/EVERDRIVE",
+        "Hacks": "", "GbcSysPayload": "", "DatFile": "",
+        "Options": {"OneGameOneRom": True},
+    }))
+
+    from unittest.mock import patch
+    with patch('everdrive.sync_app.CONFIG_FILE', str(cfg)):
+        app = _profile_app()
+        app.load_config()
+
+    assert app.active_profile == "Default"
+    assert app.config_data["Source"] == "/old/roms"
+    assert app.config_data["Options"]["OneGameOneRom"] is True
+
+
+def test_profiles_keep_paths_and_options_separate(tmp_path):
+    """Two systems, two profiles: switching swaps paths and options, no leakage."""
+    from unittest.mock import patch
+    from everdrive.profiles import blank_profile
+
+    cfg = tmp_path / "cfg.json"
+    with patch('everdrive.sync_app.CONFIG_FILE', str(cfg)):
+        app = _profile_app()
+        app.load_config()
+
+        # Profile 1: Game Boy library with 1G1R on
+        app.txt_source.insert(0, "/roms/gb")
+        app.txt_dest.insert(0, "/Volumes/GB_CARD")
+        app.chk_1g1r_var.set(True)
+        app.save_config()
+
+        # Profile 2: N64 card (as the GUI's "New" button would create it)
+        app.profiles_config["Profiles"]["N64"] = blank_profile()
+        app.switch_profile("N64")
+        assert app.txt_source.get() == "", "new profile inherited the old source path"
+        assert app.txt_dest.get() == ""
+        assert app.chk_1g1r_var.get() is False, "options leaked from the previous profile"
+
+        app.txt_source.insert(0, "/roms/n64")
+        app.txt_dest.insert(0, "/Volumes/N64_CARD")
+        app.save_config()
+
+        # Back to Game Boy: its own paths/options come back untouched
+        app.switch_profile("Default")
+        assert app.txt_source.get() == "/roms/gb"
+        assert app.txt_dest.get() == "/Volumes/GB_CARD"
+        assert app.chk_1g1r_var.get() is True
+
+    data = _json.loads(cfg.read_text())
+    assert set(data["Profiles"]) == {"Default", "N64"}
+    assert data["ActiveProfile"] == "Default"
+    assert data["Profiles"]["N64"]["Source"] == "/roms/n64"
+    assert data["Profiles"]["N64"]["Dest"] == "/Volumes/N64_CARD"
+    assert data["Profiles"]["Default"]["Dest"] == "/Volumes/GB_CARD"
+
+
+def test_profile_rename_and_delete_helpers():
+    from everdrive.profiles import (
+        blank_profile, normalize_config, rename_profile, unique_profile_name,
+    )
+    cfg = normalize_config({"Profiles": {"GB": blank_profile(), "GBA": blank_profile()},
+                            "ActiveProfile": "GB"})
+
+    assert rename_profile(cfg, "GB", "Game Boy") is True
+    assert list(cfg["Profiles"]) == ["Game Boy", "GBA"], "rename must preserve order"
+    assert cfg["ActiveProfile"] == "Game Boy"
+
+    assert rename_profile(cfg, "Game Boy", "GBA") is False, "must refuse a duplicate name"
+    assert rename_profile(cfg, "Nope", "X") is False
+
+    assert unique_profile_name(cfg, "GBA") == "GBA (2)"
+    assert unique_profile_name(cfg, "N64") == "N64"
+
+
+def test_normalize_config_survives_junk():
+    from everdrive.profiles import normalize_config
+    cfg = normalize_config({"Profiles": {"GB": "not a dict", "": {}},
+                            "ActiveProfile": "missing"})
+    assert cfg["Profiles"]["GB"]["Source"] == ""
+    assert cfg["ActiveProfile"] == "GB", "unknown active profile must fall back"
+    assert normalize_config(None)["Profiles"]["Default"]["Options"] == {}
+
+
+def test_cli_profile_selects_matching_paths(tmp_path):
+    """--profile NAME runs the sync against that profile's source/dest."""
+    gb_source = tmp_path / "gb_source"
+    gb_dest = tmp_path / "gb_card"
+    n64_source = tmp_path / "n64_source"
+    n64_dest = tmp_path / "n64_card"
+    for d in (gb_source, gb_dest, n64_source, n64_dest):
+        d.mkdir()
+    (gb_dest / "EDGB").mkdir()
+    (n64_dest / "ED64").mkdir()
+    (gb_source / "GB Game.gbc").write_text("gb rom")
+    (n64_source / "N64 Game.z64").write_text("n64 rom")
+
+    no_reorg = {"TypeFolders": False, "AZFolders": False,
+                "SeriesFolders": False, "Backups": False}
+    cfg = tmp_path / "config.json"
+    cfg.write_text(_json.dumps({
+        "ActiveProfile": "Game Boy",
+        "Profiles": {
+            "Game Boy": {"Source": str(gb_source), "Dest": str(gb_dest),
+                         "Options": dict(no_reorg)},
+            "N64": {"Source": str(n64_source), "Dest": str(n64_dest),
+                    "Options": dict(no_reorg)},
+        },
+    }))
+
+    from unittest.mock import patch
+    with patch('everdrive.headless.CONFIG_FILE', str(cfg)):
+        assert run_cli(["--profile", "N64", "--yes"]) == 0
+    assert (n64_dest / "N64 Game.z64").read_text() == "n64 rom"
+    assert not (gb_dest / "GB Game.gbc").exists(), "wrong profile's card was written"
+
+    with patch('everdrive.headless.CONFIG_FILE', str(cfg)):
+        assert run_cli(["--profile", "Game Boy", "--yes"]) == 0
+    assert (gb_dest / "GB Game.gbc").read_text() == "gb rom"
+
+
+def test_cli_unknown_profile_errors(tmp_path, capsys):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(_json.dumps({
+        "ActiveProfile": "GB", "Profiles": {"GB": {"Source": "/s", "Dest": "/d"}},
+    }))
+    from unittest.mock import patch
+    with patch('everdrive.headless.CONFIG_FILE', str(cfg)):
+        with pytest.raises(SystemExit):
+            run_cli(["--profile", "Typo", "--yes"])
+    assert "GB" in capsys.readouterr().err
+
+
+def test_cli_list_profiles(tmp_path, capsys):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(_json.dumps({
+        "ActiveProfile": "GBA",
+        "Profiles": {
+            "GB": {"Source": "/roms/gb", "Dest": "/Volumes/GB"},
+            "GBA": {"Source": "/roms/gba", "Dest": "/Volumes/GBA"},
+        },
+    }))
+    from unittest.mock import patch
+    with patch('everdrive.headless.CONFIG_FILE', str(cfg)):
+        assert run_cli(["--list-profiles"]) == 0
+    out = capsys.readouterr().out
+    assert "GB" in out and "GBA" in out
+    assert "* GBA" in out, "active profile should be marked"
+    assert "/Volumes/GB" in out
