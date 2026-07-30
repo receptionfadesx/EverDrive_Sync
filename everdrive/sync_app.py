@@ -29,6 +29,11 @@ ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
 from .constants import CONFIG_FILE, SAVE_EXTS
+from .profiles import (
+    DEFAULT_PROFILE_NAME, blank_profile, load_config_file, save_config_file,
+    profile_names, unique_profile_name,
+    rename_profile as rename_profile_in_config,
+)
 from .utils import (
     SyncCancelled, check_cancel, mtimes_match,
     catalog_pop_match, catalog_discard_path,
@@ -95,6 +100,10 @@ class SyncApp(ctk.CTk):
     cancel_event = None
     session_log = None
     stats = None
+    active_profile = DEFAULT_PROFILE_NAME
+    profiles_config = None
+    profile_menu = None
+    profile_buttons = ()
 
     # (config key, BooleanVar attribute, default) for every persisted option
     OPTION_VARS = [
@@ -123,15 +132,13 @@ class SyncApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Sync Tool for EverDrive (GB/GBA/64)")
-        self.geometry("600x1010")
+        self.geometry("600x1060")
         # Allow vertical resizing so the window still fits on 768p screens
         self.resizable(False, True)
         self.minsize(600, 600)
 
-        self.config_data = {
-            "Source": "", "Hacks": "", "GbcSysPayload": "", "Dest": "",
-            "DatFile": "", "Options": {},
-        }
+        self.config_data = blank_profile()
+        self.profiles_config = {"ActiveProfile": "", "Profiles": {}}
         self.cancel_event = threading.Event()
         self.session_log: List[str] = []
         self.prog_max = 1
@@ -139,6 +146,16 @@ class SyncApp(ctk.CTk):
         self.set_app_icon()
         self.create_widgets()
         self._apply_saved_options()
+        # Persist path edits even when the window is closed without syncing —
+        # otherwise a profile's folders have to be typed again next launch.
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def on_close(self):
+        try:
+            self.save_config()
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass  # never block closing the window on a config write
+        self.destroy()
 
     def get_asset_path(self, relative_path):
         # getattr is used to satisfy static analysis as _MEIPASS is injected at runtime by PyInstaller
@@ -159,18 +176,30 @@ class SyncApp(ctk.CTk):
             except Exception:  # pylint: disable=broad-exception-caught
                 pass
 
+    def _profile_store(self):
+        """The full multi-profile config, built lazily.
+
+        Headless/test instances skip ``__init__``, so this must cope with the
+        store never having been loaded.
+        """
+        store = getattr(self, "profiles_config", None)
+        if not isinstance(store, dict) or not store.get("Profiles"):
+            store = {
+                "ActiveProfile": self.active_profile,
+                "Profiles": {self.active_profile: self.config_data},
+            }
+            self.profiles_config = store
+        return store
+
     def load_config(self):
-        if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                for k in self.config_data:
-                    if k in data:
-                        self.config_data[k] = data[k]
-            except (json.JSONDecodeError, OSError):
-                pass
+        """Load every saved profile and make the active one current."""
+        store = load_config_file(CONFIG_FILE)
+        self.profiles_config = store
+        self.active_profile = store["ActiveProfile"]
+        self.config_data = store["Profiles"][self.active_profile]
 
     def save_config(self):
+        """Write the widget state into the active profile and persist all profiles."""
         self.config_data["Source"] = self.txt_source.get()
         self.config_data["Hacks"] = self.txt_hacks.get()
         self.config_data["GbcSysPayload"] = self.txt_gbcsys.get()
@@ -183,26 +212,166 @@ class SyncApp(ctk.CTk):
             for key, attr, _default in self.OPTION_VARS
             if getattr(self, attr, None) is not None
         }
-        try:
-            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(self.config_data, f)
-        except OSError:
-            pass
+        store = self._profile_store()
+        store["Profiles"][self.active_profile] = self.config_data
+        store["ActiveProfile"] = self.active_profile
+        save_config_file(CONFIG_FILE, store)
+
+    # ------------------------------------------------------------------ #
+    # Profiles                                                              #
+    # ------------------------------------------------------------------ #
+
+    def _refresh_profile_menu(self):
+        menu = getattr(self, "profile_menu", None)
+        if menu is not None:
+            menu.configure(values=profile_names(self._profile_store()))
+            menu.set(self.active_profile)
+
+    def _load_active_profile_into_widgets(self):
+        """Push the active profile's paths and options onto the widgets."""
+        for key, entry in (
+            ("Source", self.txt_source), ("Hacks", self.txt_hacks),
+            ("GbcSysPayload", self.txt_gbcsys), ("Dest", self.txt_dest),
+            ("DatFile", self.txt_dat),
+        ):
+            entry.delete(0, tk.END)
+            entry.insert(0, self.config_data.get(key, ""))
+        self._apply_saved_options()
+
+    def switch_profile(self, name, save_current=True):
+        """Make *name* the active profile, persisting edits to the outgoing one."""
+        store = self._profile_store()
+        if name not in store["Profiles"]:
+            return
+        if save_current:
+            self.save_config()  # capture edits into the profile being left
+        self.active_profile = name
+        self.config_data = store["Profiles"][name]
+        store["ActiveProfile"] = name
+        self._load_active_profile_into_widgets()
+        self._refresh_profile_menu()
+        save_config_file(CONFIG_FILE, store)
+
+    def on_profile_selected(self, name):
+        if name != self.active_profile:
+            self.switch_profile(name)
+
+    def _ask_profile_name(self, title, prompt, initial=""):
+        """Prompt for a profile name; returns None if cancelled or invalid."""
+        dialog = ctk.CTkInputDialog(title=title, text=prompt)
+        if initial:
+            # CTkInputDialog has no initial-value API and builds its entry on a
+            # 10ms delay, so seed it once that entry exists.
+            def _prefill():
+                entry = getattr(dialog, "_entry", None)
+                if entry is not None:
+                    try:
+                        entry.insert(0, initial)
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        pass  # dialog already dismissed
+            dialog.after(100, _prefill)
+        name = (dialog.get_input() or "").strip()
+        if not name:
+            return None
+        existing = profile_names(self._profile_store())
+        if name != initial and name.lower() in {n.lower() for n in existing}:
+            messagebox.showerror("Profile exists", f"A profile named '{name}' already exists.")
+            return None
+        return name
+
+    def new_profile(self):
+        """Create an empty profile (paths blank, options at their defaults)."""
+        name = self._ask_profile_name(
+            "New Profile", "Name for the new profile (e.g. Game Boy, GBA, N64):")
+        if not name:
+            return
+        self.save_config()
+        store = self._profile_store()
+        store["Profiles"][name] = blank_profile()
+        self.switch_profile(name, save_current=False)
+        self.log_msg(f"Created profile '{name}'.")
+
+    def duplicate_profile(self):
+        """Copy the active profile — handy for a second card with the same options."""
+        self.save_config()
+        store = self._profile_store()
+        suggested = unique_profile_name(store, f"{self.active_profile} copy")
+        name = self._ask_profile_name(
+            "Duplicate Profile", "Name for the copy:", initial=suggested)
+        if not name:
+            return
+        store["Profiles"][name] = dict(self.config_data, Options=dict(
+            self.config_data.get("Options") or {}))
+        self.switch_profile(name, save_current=False)
+        self.log_msg(f"Duplicated profile into '{name}'.")
+
+    def rename_profile(self):
+        old = self.active_profile
+        name = self._ask_profile_name("Rename Profile", "New name:", initial=old)
+        if not name or name == old:
+            return
+        self.save_config()
+        store = self._profile_store()
+        if rename_profile_in_config(store, old, name):
+            self.active_profile = name
+            self.config_data = store["Profiles"][name]
+            self._refresh_profile_menu()
+            save_config_file(CONFIG_FILE, store)
+            self.log_msg(f"Renamed profile '{old}' to '{name}'.")
+
+    def delete_profile(self):
+        store = self._profile_store()
+        names = profile_names(store)
+        if len(names) < 2:
+            messagebox.showinfo(
+                "Can't delete", "This is the only profile — create another one first.")
+            return
+        gone = self.active_profile
+        if not messagebox.askokcancel(
+                "Delete Profile",
+                f"Delete profile '{gone}'?\n\nOnly the saved paths and options are"
+                " removed — nothing on your SD card or PC is touched."):
+            return
+        store["Profiles"].pop(gone, None)
+        remaining = profile_names(store)
+        self.switch_profile(remaining[0], save_current=False)
+        self.log_msg(f"Deleted profile '{gone}'.")
 
     # ------------------------------------------------------------------ #
     # Widget construction                                                   #
     # ------------------------------------------------------------------ #
 
     def create_widgets(self):
+        self._build_profile_frame()
         self._build_path_frame()
         self._build_options_frame()
         self._build_log_controls()
+
+    def _build_profile_frame(self):
+        """Profile picker: every system/card keeps its own paths and options."""
+        frame = ctk.CTkFrame(self)
+        frame.pack(pady=(10, 0), padx=20, fill="x")
+        ctk.CTkLabel(frame, text="Profile:").pack(side="left", padx=(5, 5), pady=8)
+        self.profile_menu = ctk.CTkOptionMenu(
+            frame, width=170, values=profile_names(self._profile_store()),
+            command=self.on_profile_selected,
+        )
+        self.profile_menu.set(self.active_profile)
+        self.profile_menu.pack(side="left", padx=5, pady=8)
+        self.profile_buttons = []
+        for text, cmd in (
+            ("New", self.new_profile), ("Copy", self.duplicate_profile),
+            ("Rename", self.rename_profile), ("Delete", self.delete_profile),
+        ):
+            btn = ctk.CTkButton(frame, text=text, width=56, command=cmd)
+            btn.pack(side="left", padx=2, pady=8)
+            self.profile_buttons.append(btn)
 
     def _add_path_row(self, parent, row, label, key, file_picker=False):
         """Add one Source/Dest browse row; return the CTkEntry widget."""
         ctk.CTkLabel(parent, text=label).grid(row=row, column=0, padx=5, pady=5, sticky="w")
         entry = ctk.CTkEntry(parent, width=350)
-        entry.insert(0, self.config_data[key])
+        entry.insert(0, self.config_data.get(key, ""))
         entry.grid(row=row, column=1, padx=5, pady=5)
         browse = self.browse_file if file_picker else self.browse_folder
         ctk.CTkButton(
@@ -349,13 +518,16 @@ class SyncApp(ctk.CTk):
         self.chk_jpn.configure(state=state)
 
     def _apply_saved_options(self):
-        """Restore checkbox states persisted by a previous session."""
+        """Restore checkbox states from the active profile.
+
+        Options the profile doesn't specify fall back to their default, so
+        switching profiles never leaks the previous profile's toggles.
+        """
         opts = self.config_data.get("Options") or {}
-        for key, attr, _default in self.OPTION_VARS:
-            if key in opts:
-                var = getattr(self, attr, None)
-                if var is not None:
-                    var.set(bool(opts[key]))
+        for key, attr, default in self.OPTION_VARS:
+            var = getattr(self, attr, None)
+            if var is not None:
+                var.set(bool(opts.get(key, default)))
         self.toggle_reorg()
         self.toggle_1g1r()
 
@@ -416,6 +588,9 @@ class SyncApp(ctk.CTk):
                 self.chk_usa, self.chk_world, self.chk_eur, self.chk_jpn,
             ):
                 w.configure(state="disabled")
+        # Switching profiles mid-sync would swap the paths under the worker
+        for w in [self.profile_menu] + list(self.profile_buttons):
+            w.configure(state=state)
         for w in (
             self.chk_reorganize, self.chk_1g1r, self.chk_zip, self.chk_tags,
             self.chk_backups, self.chk_restore, self.chk_verify, self.chk_orphans,

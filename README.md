@@ -17,6 +17,7 @@ EverDrive cartridges often exhibit specific quirks such as requiring FAT32 alpha
 ## Features
 
 - **Intuitive GUI**: Easy-to-use graphical interface built directly in Python via `customtkinter`. Configures your source, destination, and sync options without needing to touch the command line.
+- **Multi-System Profiles**: Keep a saved profile per system or per card (e.g. `Game Boy`, `GBA`, `N64`) — each remembers its own Source, ROM Hacks, GBCSYS, SD card, DAT file *and* every checkbox. Pick a profile from the dropdown instead of re-typing folders each time you swap cards, and drive the same profiles from the CLI with `--profile N64`.
 - **Hardware-Compliant Copying**: Copies files strictly in alphabetical order to ensure menus sort correctly on the EverDrive hardware (which relies on FAT32 write-order).
 - **Smart Sync**: Intelligently updates your SD card by moving existing ROMs/saves locally and only copying new files, drastically speeding up the sync process compared to a full wipe and copy. 
 - **Force Full Copy**: Wipes the SD card and rewrites everything cleanly to fix stubborn alphabetical sorting issues on the flash cart. Protects crucial system folders (e.g., `GBCSYS`, `EDGB`) from being deleted.
@@ -90,6 +91,17 @@ Then:
 
 > **Note:** The script will automatically save your selected paths and options to `~/.everdrive_sync_config.json` for your next session.
 
+### Profiles (one per system / SD card)
+
+If you own more than one EverDrive, use the **Profile** row at the top of the window instead of editing paths every time you swap cards:
+
+- **Dropdown**: switch profiles. The profile you were on is saved first, then the new one's paths and checkboxes are loaded — nothing carries over between profiles.
+- **New**: start a fresh profile (blank paths, default options). Name it after the system or card, e.g. `Game Boy`, `GBA`, `N64`.
+- **Copy**: duplicate the current profile — handy for a second card that should keep the same options.
+- **Rename** / **Delete**: manage the list. Deleting only removes saved settings; nothing on your SD card or PC is touched, and the last remaining profile can't be deleted.
+
+All profiles live in the same `~/.everdrive_sync_config.json`, along with which one was last active. Upgrading from an older version is automatic: your existing paths and options become a profile named `Default` on first launch.
+
 ## Quick Start (Python Source)
 
 Alternatively, if you prefer to run the script via Python directly:
@@ -110,6 +122,12 @@ python sync_everdrive.py --source ~/ROMs --dest /Volumes/EVERDRIVE --eject --yes
 
 # Reuse the paths and options you saved in the GUI (flags still override)
 python sync_everdrive.py --use-saved-config --yes
+
+# Run a specific saved profile — no need to repeat its folders
+python sync_everdrive.py --profile N64 --yes
+
+# See which profiles exist (the active one is marked with *)
+python sync_everdrive.py --list-profiles
 
 # Verify writes and check ROMs against a No-Intro DAT
 python sync_everdrive.py --source ~/ROMs --dest /Volumes/EVERDRIVE --verify --dat ~/no-intro_gbc.dat --yes
