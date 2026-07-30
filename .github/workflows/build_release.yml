@@ -22,6 +22,9 @@ jobs:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
+      # One platform failing should not cancel the others mid-upload; we want
+      # to see every platform's result in a single run.
+      fail-fast: false
       matrix:
         include:
           - os: windows-2022
@@ -71,9 +74,34 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: zip -r ${{ matrix.artifact_name }}.zip ${{ matrix.dist_path }}
 
+      # Hand the zip to the single release job below rather than uploading it
+      # here. When each matrix job published directly, all three raced to
+      # create the same release: the first won, the others could not yet see
+      # the tag, created their own untagged drafts, and then failed to
+      # finalize with "already_exists".
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
       - name: Upload to GitHub Release
+        # Exactly one job touches the release, so there is no create/finalize
+        # race regardless of how closely the builds finish together.
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: ${{ matrix.artifact_name }}.zip
+          files: artifacts/**/*.zip
           generate_release_notes: true
