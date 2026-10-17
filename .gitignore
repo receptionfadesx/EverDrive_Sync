@@ -12,7 +12,9 @@ venv/
 # PyInstaller build artifacts
 build/
 dist/
+*.zip
 *.spec
+!sync_everdrive.spec
 
 # Pytest
 .pytest_cache/
