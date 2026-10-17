@@ -198,6 +198,9 @@ class MockSyncApp(SyncApp):
         if func:
             func(*args)
 
+    def ask_okcancel(self, title, msg):
+        return True
+
 def test_backup_restore_case_insensitivity(tmp_path):
     source = tmp_path / "source"
     dest = tmp_path / "sd_card"
@@ -1819,3 +1822,102 @@ def test_cli_list_profiles(tmp_path, capsys):
     assert "GB" in out and "GBA" in out
     assert "* GBA" in out, "active profile should be marked"
     assert "/Volumes/GB" in out
+
+
+def test_1g1r_single_game_filter():
+    files = [Path("Pokemon (Japan).gb")]
+    # When jpn is False, single-game group must be filtered out
+    assert get_best_region_games(files, jpn=False) == []
+    # When jpn is True, it is kept
+    assert len(get_best_region_games(files, jpn=True)) == 1
+
+
+def test_clean_rom_name_cjk():
+    # CJK characters should not be completely stripped to empty string
+    clean = get_clean_rom_name("ポケットモンスター 赤 (Japan)")
+    assert "ポケットモンスター" in clean
+    assert "(Japan)" not in clean
+
+
+def test_detect_os_folder_case_insensitive(tmp_path):
+    dest = tmp_path / "sd"
+    dest.mkdir()
+    (dest / "gbos").mkdir()
+    app = MockSyncApp(dest=str(dest))
+    os_folder, save_base, rtc_base = app._detect_os_folder(str(dest))
+    assert os_folder == "gbos"
+    assert save_base == "SAVES"
+    assert rtc_base == "SAVES"
+
+
+def test_validate_inputs_lowercase_os(tmp_path):
+    source = tmp_path / "src"
+    source.mkdir()
+    dest = tmp_path / "sd"
+    dest.mkdir()
+    (dest / "edgb").mkdir()
+    app = MockSyncApp(source=str(source), dest=str(dest))
+    assert app._validate_inputs(str(source), "", str(dest)) is True
+
+
+def test_backup_saves_preserves_non_os_subfolders(tmp_path):
+    source = tmp_path / "src"
+    source.mkdir()
+    dest = tmp_path / "sd"
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+
+    (dest / "Games" / "Action").mkdir(parents=True)
+    (dest / "Games" / "RPG").mkdir(parents=True)
+    (dest / "Games" / "Action" / "save.sav").write_text("action save")
+    (dest / "Games" / "RPG" / "save.sav").write_text("rpg save")
+
+    app = MockSyncApp(source=str(source), dest=str(dest), backups=True)
+    app.backup_saves(str(source), "", str(dest), "EDGB")
+
+    snap = latest_backup_dir(source)
+    assert (snap / "Games" / "Action" / "save.sav").exists()
+    assert (snap / "Games" / "RPG" / "save.sav").exists()
+    assert (snap / "Games" / "Action" / "save.sav").read_text() == "action save"
+    assert (snap / "Games" / "RPG" / "save.sav").read_text() == "rpg save"
+
+
+def test_save_rename_preserves_title_starting_with_prefix(tmp_path):
+    dest = tmp_path / "sd"
+    dest.mkdir()
+    save_dir = dest / "EDGB" / "SAVE"
+    save_dir.mkdir(parents=True)
+
+    (save_dir / "GBA_Explorer.sav").write_text("save data")
+
+    app = MockSyncApp(dest=str(dest))
+    rom_name_map = {"gba explorer": "GBA Explorer"}
+    app.rename_sd_saves(str(dest), "EDGB", "SAVE", "RTC", rom_name_map)
+
+    assert (save_dir / "GBA Explorer.sav").exists()
+
+
+def test_atomic_save_config_file(tmp_path):
+    from everdrive.profiles import save_config_file, load_config_file
+    cfg_file = tmp_path / "test_cfg.json"
+    data = {"ActiveProfile": "GB", "Profiles": {"GB": {"Source": "A", "Dest": "B", "Options": {}}}}
+    assert save_config_file(str(cfg_file), data) is True
+    loaded = load_config_file(str(cfg_file))
+    assert loaded["ActiveProfile"] == "GB"
+
+
+def test_extract_zips_zip_slip_prevention(tmp_path):
+    import zipfile
+    source = tmp_path / "src"
+    source.mkdir()
+    zip_path = source / "test_slip.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("../../evil.gb", b"evil content")
+        zf.writestr("good.gb", b"good content")
+
+    app = MockSyncApp(source=str(source), zip=True)
+    temp_dir = app._extract_zips(str(source), {".gb"})
+    assert temp_dir is not None
+    assert (Path(temp_dir) / "good.gb").exists()
+    assert not (Path(temp_dir).parent / "evil.gb").exists()
+    shutil.rmtree(temp_dir, ignore_errors=True)

@@ -4,7 +4,9 @@ import argparse
 import threading
 
 from .constants import CONFIG_FILE
-from .profiles import blank_profile, get_profile, load_config_file, profile_names
+from .profiles import (
+    DEFAULT_PROFILE_NAME, blank_profile, get_profile, load_config_file, profile_names,
+)
 from .sync_app import SyncApp
 
 
@@ -72,7 +74,7 @@ class HeadlessApp(SyncApp):
                 config = load_config_file(CONFIG_FILE)
             cfg = get_profile(config, wanted) or blank_profile()
             self.active_profile = (
-                wanted or config.get("ActiveProfile") or self.active_profile)
+                wanted or config.get("ActiveProfile") or getattr(self, "active_profile", DEFAULT_PROFILE_NAME))
         cfg_opts = cfg.get("Options") if isinstance(cfg.get("Options"), dict) else {}
 
         def opt(key, default):
@@ -272,7 +274,9 @@ def run_cli(argv=None) -> int:
     if not headless_app.txt_dest.get().strip():
         parser.error("--dest is required (or save a Dest in a GUI profile and pass"
                      " --use-saved-config / --profile NAME)")
-    # No explicit args: HeadlessApp already merged CLI flags with any saved
-    # config, and run_sync falls back to reading the entry stand-ins.
-    headless_app.run_sync()
+    try:
+        headless_app.run_sync()
+    except KeyboardInterrupt:
+        headless_app.log_msg("\nSync cancelled by user (Ctrl+C).")
+        return 130
     return 1 if getattr(headless_app, "had_error", False) else 0

@@ -104,6 +104,8 @@ class SyncApp(ctk.CTk):
     profiles_config = None
     profile_menu = None
     profile_buttons = ()
+    _options_cache = None
+    had_error = False
 
     # (config key, BooleanVar attribute, default) for every persisted option
     OPTION_VARS = [
@@ -531,6 +533,13 @@ class SyncApp(ctk.CTk):
         self.toggle_reorg()
         self.toggle_1g1r()
 
+    def _opt(self, attr: str, default: bool = False) -> bool:
+        cache = getattr(self, "_options_cache", None)
+        if cache is not None and attr in cache:
+            return bool(cache[attr])
+        var = getattr(self, attr, None)
+        return bool(var.get()) if var is not None else default
+
     def browse_folder(self, entry_widget):
         folder = filedialog.askdirectory()
         if folder:
@@ -557,7 +566,6 @@ class SyncApp(ctk.CTk):
         self.txt_log.insert("end", msg + "\n")
         self.txt_log.see("end")
         self.txt_log.configure(state="disabled")
-        self.update_idletasks()
 
     def set_progress(self, value, maximum=100):
         if maximum > 0:
@@ -646,6 +654,12 @@ class SyncApp(ctk.CTk):
             "dest": self.txt_dest.get().strip(),
             "dat": self.txt_dat.get().strip(),
         }
+        options_snapshot = {
+            attr: bool(getattr(self, attr).get())
+            for _key, attr, _default in self.OPTION_VARS
+            if getattr(self, attr, None) is not None
+        }
+        params["options_snapshot"] = options_snapshot
         threading.Thread(target=lambda: self.run_sync(**params), daemon=True).start()
 
     # ------------------------------------------------------------------ #
@@ -684,9 +698,9 @@ class SyncApp(ctk.CTk):
                 if not child.is_folder and "." in target_name:
                     base, ext = os.path.splitext(target_name)
                     if allowed_chars > len(ext):
-                        target_name = base[:allowed_chars - len(ext)] + ext
+                        target_name = base[:allowed_chars - len(ext)].rstrip('. ') + ext
                 elif allowed_chars > 0:
-                    target_name = target_name[:allowed_chars]
+                    target_name = target_name[:allowed_chars].rstrip('. ')
 
             # FAT32 is case-insensitive, and truncation above can collide two
             # siblings — uniquify files so one doesn't overwrite the other.
@@ -807,6 +821,11 @@ class SyncApp(ctk.CTk):
                         idx = root_parts_lower.index(os_folder.lower())
                         actual_os_path = os.path.join(*Path(root).parts[:idx+1])
                         rel_path = os.path.relpath(src_file, actual_os_path)
+                    else:
+                        try:
+                            rel_path = os.path.relpath(src_file, dest)
+                        except ValueError:
+                            rel_path = f
                     if not dry_run:
                         save_dest = os.path.join(backup_dir, rel_path)
                         os.makedirs(os.path.dirname(save_dest), exist_ok=True)
@@ -945,12 +964,14 @@ class SyncApp(ctk.CTk):
             if not (os.path.isdir(item_path) and item.lower().endswith(".gba")):
                 continue
             stem = os.path.splitext(item)[0]
-            clean_stem = str(re.sub(
-                r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_+', '', stem
-            ))
-            if not clean_stem:
-                continue
-            matched = SyncApp._fuzzy_match_rom(clean_stem, rom_name_map)
+            matched = SyncApp._fuzzy_match_rom(stem, rom_name_map)
+            if not matched:
+                clean_stem = str(re.sub(
+                    r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_+', '', stem
+                ))
+                if not clean_stem:
+                    continue
+                matched = SyncApp._fuzzy_match_rom(clean_stem, rom_name_map)
             if not matched:
                 continue
             new_folder_name = SyncApp._fav_prefixed(matched + ".gba", favs)
@@ -983,10 +1004,8 @@ class SyncApp(ctk.CTk):
         self, dest: str, os_folder: str, save_base: str, rtc_base: str,
         rom_name_map: dict, favs=None
     ) -> None:
-        sys_paths = [
-            os.path.join(dest, os_folder, save_base),
-            os.path.join(dest, os_folder, rtc_base),
-        ]
+        save_dirs = list(dict.fromkeys([save_base, rtc_base]))
+        sys_paths = [os.path.join(dest, os_folder, d) for d in save_dirs]
         for sp in sys_paths:
             if not os.path.isdir(sp):
                 continue
@@ -996,12 +1015,15 @@ class SyncApp(ctk.CTk):
                 if not os.path.isfile(full):
                     continue
                 stem, ext = os.path.splitext(f)
-                clean_stem: str = str(re.sub(
-                    r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_+', '', stem
-                ))
-                if not clean_stem:
-                    continue
-                matched = SyncApp._fuzzy_match_rom(clean_stem, rom_name_map)
+                matched = SyncApp._fuzzy_match_rom(stem, rom_name_map)
+                clean_stem = stem
+                if not matched:
+                    clean_stem = str(re.sub(
+                        r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_+', '', stem
+                    ))
+                    if not clean_stem:
+                        continue
+                    matched = SyncApp._fuzzy_match_rom(clean_stem, rom_name_map)
                 new_name = SyncApp._fav_prefixed(
                     (matched if matched else get_clean_rom_name(clean_stem)) + ext, favs
                 )
@@ -1110,10 +1132,9 @@ class SyncApp(ctk.CTk):
                 return False
         if not self._confirm_dest_safe(dest, real_dest):
             return False
-        has_os = any(
-            os.path.exists(os.path.join(dest, d))
-            for d in ["EDGB", "GBOS", "GBCSYS", "ED64", "GBASYS", "EDGBA"]
-        )
+        system_os_names = {"edgb", "gbos", "gbcsys", "ed64", "gbasys", "edgba"}
+        existing_items = {item.lower() for item in os.listdir(dest)} if os.path.isdir(dest) else set()
+        has_os = bool(existing_items & system_os_names)
         if not has_os:
             self.show_error("Error", "Missing OS folder on SD.")
             return False
@@ -1157,7 +1178,7 @@ class SyncApp(ctk.CTk):
                 except OSError:
                     continue
         reclaimable = 0
-        if self.chk_reorganize_var.get():
+        if self._opt("chk_reorganize_var", True):
             # Reorganise moves or deletes every non-system entry on the card,
             # so that space becomes available again during the sync.
             for item in os.listdir(dest):
@@ -1192,18 +1213,20 @@ class SyncApp(ctk.CTk):
 
     def _detect_os_folder(self, dest) -> Tuple[str, str, str]:
         """Detect and return (os_folder, save_base, rtc_base) for the SD card."""
-        os_folder = "EDGB"
-        for candidate in ["GBOS", "GBCSYS", "ED64", "GBASYS", "EDGBA"]:
-            if os.path.exists(os.path.join(dest, candidate)):
-                os_folder = candidate
-                break
-
-        # Resolve the actual case-preserved folder name on the SD card
+        candidates = ["GBOS", "GBCSYS", "ED64", "GBASYS", "EDGBA", "EDGB"]
+        found_map = {}
         if os.path.isdir(dest):
-            for item in os.listdir(dest):
-                if item.lower() == os_folder.lower():
-                    os_folder = item
-                    break
+            try:
+                for item in os.listdir(dest):
+                    found_map[item.upper()] = item
+            except OSError:
+                pass
+
+        os_folder = "EDGB"
+        for candidate in candidates:
+            if candidate in found_map:
+                os_folder = found_map[candidate]
+                break
 
         if os_folder.upper() == "GBOS":
             save_base, rtc_base = "SAVES", "SAVES"
@@ -1226,7 +1249,7 @@ class SyncApp(ctk.CTk):
         sd_catalog = self.catalog_sd(dest, rom_exts)
         temp_sd_dir = None
 
-        if self.chk_reorganize_var.get() and sd_catalog and not self.dry_run:
+        if self._opt("chk_reorganize_var", True) and sd_catalog and not self.dry_run:
             temp_sd_dir = os.path.join(dest, ".sync_temp")
             os.makedirs(temp_sd_dir, exist_ok=True)
             updated_catalog: Dict[int, List[Tuple[int, str]]] = {}
@@ -1262,12 +1285,13 @@ class SyncApp(ctk.CTk):
 
     def _extract_zips(self, source, rom_exts) -> Optional[str]:
         """Extract ROM zips to a temp directory. Returns the temp dir path or None."""
-        if not (self.chk_zip_var.get() and source and os.path.isdir(source)):
+        if not (self._opt("chk_zip_var", False) and source and os.path.isdir(source)):
             return None
         zip_files = list(Path(source).rglob("*.zip"))
         if not zip_files:
             return None
         temp_dir = tempfile.mkdtemp(prefix="EverDrive_")
+        temp_dir_real = os.path.realpath(temp_dir)
         self.log_msg(f"Extracting {len(zip_files)} zip files to temp directory...")
         for zf in zip_files:
             check_cancel(self)
@@ -1276,7 +1300,15 @@ class SyncApp(ctk.CTk):
                     for member in zip_ref.namelist():
                         member_ext = os.path.splitext(member.lower())[1]
                         if member_ext in rom_exts:
-                            zip_ref.extract(member, temp_dir)
+                            target_path = os.path.realpath(os.path.join(temp_dir, member))
+                            try:
+                                is_safe = os.path.commonpath([temp_dir_real, target_path]) == temp_dir_real
+                            except ValueError:
+                                is_safe = False
+                            if is_safe:
+                                zip_ref.extract(member, temp_dir)
+                            else:
+                                self.log_msg(f"Warning: Skipped unsafe path in zip '{zf.name}': {member}")
             except (zipfile.BadZipFile, OSError) as e:
                 self.log_msg(f"Failed to extract {zf.name}: {e}")
         return temp_dir
@@ -1284,7 +1316,7 @@ class SyncApp(ctk.CTk):
     def _load_favorites(self, source) -> set:
         """Load favorites.txt. Returns a set of fuzzy-matched titles."""
         favs: set = set()
-        if not (self.chk_fav_var.get() and source):
+        if not (self._opt("chk_fav_var", False) and source):
             return favs
         fav_path = os.path.join(source, "favorites.txt")
         if not os.path.exists(fav_path):
@@ -1314,7 +1346,7 @@ class SyncApp(ctk.CTk):
                     continue
                 if any(part.lower() in _os_excl for part in p.parts):
                     continue
-                if p.suffix.lower() == ".zip" and self.chk_zip_var.get():
+                if p.suffix.lower() == ".zip" and self._opt("chk_zip_var", False):
                     continue
                 all_files.append(p)
 
@@ -1344,32 +1376,32 @@ class SyncApp(ctk.CTk):
         rom_exts, save_exts, system_groups, sav_files, other_files, favs
     ) -> Tuple[VirtualNode, Dict[str, str]]:
         """Build a virtual tree for reorganize mode. Returns (v_root, rom_name_map)."""
-        if self.chk_1g1r_var.get():
+        if self._opt("chk_1g1r_var", False):
             self.log_msg("Applying 1G1R filter...")
             for sys_name, files in system_groups.items():
                 system_groups[sys_name] = get_best_region_games(
                     files,
-                    self.chk_usa_var.get(), self.chk_world_var.get(),
-                    self.chk_eur_var.get(), self.chk_jpn_var.get()
+                    self._opt("chk_usa_var", True), self._opt("chk_world_var", True),
+                    self._opt("chk_eur_var", True), self._opt("chk_jpn_var", True)
                 )
 
-        if self.chk_series_var.get():
+        if self._opt("chk_series_var", True):
             self.log_msg("Analyzing files for series grouping...")
 
         rom_name_map: Dict[str, str] = {}
         v_root = VirtualNode("", True)
 
         for sys_name, files in system_groups.items():
-            groups = get_series_groups(files) if self.chk_series_var.get() else {}
+            groups = get_series_groups(files) if self._opt("chk_series_var", True) else {}
             for f in files:
                 group = groups.get(str(f.absolute()), "")
-                parts = [sys_name] if self.chk_type_var.get() else []
+                parts = [sys_name] if self._opt("chk_type_var", True) else []
                 if group:
                     parts.append(group)
-                elif self.chk_az_var.get():
+                elif self._opt("chk_az_var", True):
                     fc = get_clean_rom_name(f.stem)
                     parts.append(fc[0].upper() if fc and fc[0].isalpha() else "#")
-                clean_name = get_clean_rom_name(f.stem, self.chk_tags_var.get())
+                clean_name = get_clean_rom_name(f.stem, self._opt("chk_tags_var", True))
                 parts.append(clean_name + f.suffix)
                 add_to_virtual_tree(v_root, str(f.absolute()), parts, False, favs)
                 rom_name_map[get_fuzzy_title(f.stem)] = clean_name
@@ -1413,22 +1445,22 @@ class SyncApp(ctk.CTk):
             if p.is_file() and not p.name.startswith("._") and p.name != ".DS_Store"
             and p.suffix.lower() in rom_exts
         ]
-        if self.chk_1g1r_var.get():
+        if self._opt("chk_1g1r_var", False):
             hack_roms = get_best_region_games(
                 hack_roms,
-                self.chk_usa_var.get(), self.chk_world_var.get(),
-                self.chk_eur_var.get(), self.chk_jpn_var.get()
+                self._opt("chk_usa_var", True), self._opt("chk_world_var", True),
+                self._opt("chk_eur_var", True), self._opt("chk_jpn_var", True)
             )
-        hack_groups = get_series_groups(hack_roms) if self.chk_series_var.get() else {}
+        hack_groups = get_series_groups(hack_roms) if self._opt("chk_series_var", True) else {}
         for f in hack_roms:
             group = hack_groups.get(str(f.absolute()), "")
             parts = ["[ROM Hacks]"]
             if group:
                 parts.append(group)
-            elif self.chk_az_var.get():
+            elif self._opt("chk_az_var", True):
                 fc = get_clean_rom_name(f.stem)
                 parts.append(fc[0].upper() if fc and fc[0].isalpha() else "#")
-            clean_name = get_clean_rom_name(f.stem, self.chk_tags_var.get())
+            clean_name = get_clean_rom_name(f.stem, self._opt("chk_tags_var", True))
             parts.append(clean_name + f.suffix)
             add_to_virtual_tree(v_root, str(f.absolute()), parts, False, favs)
             rom_name_map[get_fuzzy_title(f.stem)] = clean_name
@@ -1445,12 +1477,15 @@ class SyncApp(ctk.CTk):
         self, v_root, s, os_folder, save_base, rtc_base, rom_name_map, favs
     ):
         final_ext = s.suffix
-        clean_base: str = str(re.sub(
-            r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_+', '', s.stem
-        ))
-        if not clean_base:
-            return
-        matched_name = self._fuzzy_match_rom(clean_base, rom_name_map)
+        matched_name = self._fuzzy_match_rom(s.stem, rom_name_map)
+        clean_base = s.stem
+        if not matched_name:
+            clean_base = str(re.sub(
+                r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_+', '', s.stem
+            ))
+            if not clean_base:
+                return
+            matched_name = self._fuzzy_match_rom(clean_base, rom_name_map)
         base_name = matched_name if matched_name else get_clean_rom_name(clean_base)
         # Apply the favorites prefix here (not via add_to_virtual_tree) so the
         # GBA Pro gamedata folder gets the same prefix as the save file.
@@ -1475,10 +1510,8 @@ class SyncApp(ctk.CTk):
             self._mirror_copy(source, dest)
 
         if os_folder.lower() != "edgba":
-            for sp in [
-                os.path.join(dest, os_folder, save_base),
-                os.path.join(dest, os_folder, rtc_base),
-            ]:
+            save_dirs = list(dict.fromkeys([save_base, rtc_base]))
+            for sp in [os.path.join(dest, os_folder, d) for d in save_dirs]:
                 if os.path.isdir(sp):
                     for sub in os.listdir(sp):
                         sub_path = os.path.join(sp, sub)
@@ -1509,13 +1542,13 @@ class SyncApp(ctk.CTk):
             if p.is_file() and not p.name.startswith("._") and p.name != ".DS_Store"
             and p.suffix.lower() in rom_exts
         ]
-        if self.chk_1g1r_var.get():
+        if self._opt("chk_1g1r_var", False):
             bypass_hack_roms = get_best_region_games(
                 bypass_hack_roms,
-                self.chk_usa_var.get(), self.chk_world_var.get(),
-                self.chk_eur_var.get(), self.chk_jpn_var.get()
+                self._opt("chk_usa_var", True), self._opt("chk_world_var", True),
+                self._opt("chk_eur_var", True), self._opt("chk_jpn_var", True)
             )
-        bypass_hack_groups = get_series_groups(bypass_hack_roms) if self.chk_series_var.get() else {}
+        bypass_hack_groups = get_series_groups(bypass_hack_roms) if self._opt("chk_series_var", True) else {}
         bypass_rom_name_map: Dict[str, str] = {}
 
         for f in bypass_hack_roms:
@@ -1523,10 +1556,10 @@ class SyncApp(ctk.CTk):
             dest_parts = []
             if group:
                 dest_parts.append(group)
-            elif self.chk_az_var.get():
+            elif self._opt("chk_az_var", True):
                 fc = get_clean_rom_name(f.stem)
                 dest_parts.append(fc[0].upper() if fc and fc[0].isalpha() else "#")
-            clean_name = get_clean_rom_name(f.stem, self.chk_tags_var.get())
+            clean_name = get_clean_rom_name(f.stem, self._opt("chk_tags_var", True))
             target_dir = hacks_dest
             for part in dest_parts:
                 target_dir = os.path.join(target_dir, part)
@@ -1541,10 +1574,13 @@ class SyncApp(ctk.CTk):
 
         for p in Path(hacks).rglob("*"):
             if p.is_file() and p.suffix.lower() in save_exts:
-                clean_sav: str = str(re.sub(
-                    r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_+', '', p.stem
-                ))
-                matched_sav = bypass_rom_name_map.get(get_fuzzy_title(clean_sav))
+                matched_sav = bypass_rom_name_map.get(get_fuzzy_title(p.stem))
+                clean_sav = p.stem
+                if not matched_sav:
+                    clean_sav = str(re.sub(
+                        r'(?i)^(GBC|GB|GBA|EDGB|GBCSYS|GBOS|SAVE|RTC|SAVES)_+', '', p.stem
+                    ))
+                    matched_sav = bypass_rom_name_map.get(get_fuzzy_title(clean_sav))
                 final_sav_name = (
                     matched_sav if matched_sav else get_clean_rom_name(clean_sav)
                 ) + p.suffix
@@ -1580,6 +1616,14 @@ class SyncApp(ctk.CTk):
                 src_file = os.path.join(root, f)
                 rel_path = os.path.relpath(src_file, gbcsys)
                 target_path = os.path.join(target_os_dir, rel_path)
+                if os.path.exists(target_path):
+                    try:
+                        s_stat = os.stat(src_file)
+                        d_stat = os.stat(target_path)
+                        if s_stat.st_size == d_stat.st_size and mtimes_match(s_stat.st_mtime, d_stat.st_mtime):
+                            continue
+                    except OSError:
+                        pass
                 if self.dry_run:
                     self.log_msg(f" -> [DRY RUN] Would copy payload: {rel_path}")
                 else:
@@ -1591,9 +1635,18 @@ class SyncApp(ctk.CTk):
     # Main sync orchestrator                                                #
     # ------------------------------------------------------------------ #
 
-    def run_sync(self, source=None, hacks=None, gbcsys=None, dest=None, dat=None):
+    def run_sync(self, source=None, hacks=None, gbcsys=None, dest=None, dat=None, options_snapshot=None):
         # Values are passed in by start_sync_thread (read on the main thread);
         # fall back to widget reads for direct callers.
+        if options_snapshot is not None:
+            self._options_cache = options_snapshot
+        else:
+            self._options_cache = {
+                attr: bool(getattr(self, attr).get())
+                for _key, attr, _default in self.OPTION_VARS
+                if getattr(self, attr, None) is not None
+            }
+
         if source is None:
             source = self.txt_source.get().strip()
         if hacks is None:
@@ -1606,10 +1659,8 @@ class SyncApp(ctk.CTk):
             dat_widget = getattr(self, "txt_dat", None)
             dat = dat_widget.get().strip() if dat_widget else ""
 
-        dryrun_var = getattr(self, "chk_dryrun_var", None)
-        self.dry_run = bool(dryrun_var.get()) if dryrun_var else False
-        verify_var = getattr(self, "chk_verify_var", None)
-        self.verify_writes = bool(verify_var.get()) if verify_var else False
+        self.dry_run = self._opt("chk_dryrun_var", False)
+        self.verify_writes = self._opt("chk_verify_var", False)
 
         if not self._validate_inputs(source, hacks, dest):
             return
@@ -1646,12 +1697,12 @@ class SyncApp(ctk.CTk):
             self.prog_max = 1
             self.after(0, lambda: self.progress_bar.set(0))
 
-            if self.chk_backups_var.get() and os.path.isdir(dest):
+            if self._opt("chk_backups_var", True) and os.path.isdir(dest):
                 self.backup_saves(source, hacks, dest, os_folder)
 
             sd_catalog, temp_sd_dir = self._prepare_sd_catalog(dest, rom_exts)
 
-            if self.chk_reorganize_var.get():
+            if self._opt("chk_reorganize_var", True):
                 self.clean_sd(dest, os_folder)
 
             temp_unzip_dir = self._extract_zips(source, rom_exts)
@@ -1666,7 +1717,7 @@ class SyncApp(ctk.CTk):
 
             persisted_name_map = SyncApp._load_name_manifest(source, hacks)
 
-            if self.chk_reorganize_var.get():
+            if self._opt("chk_reorganize_var", True):
                 v_root, rom_name_map = self._build_reorganize_tree(
                     source, hacks, os_folder, save_base, rtc_base,
                     rom_exts, save_exts, system_groups, sav_files, other_files, favs
@@ -1690,7 +1741,7 @@ class SyncApp(ctk.CTk):
                 )
                 self.copy_virtual_tree(
                     v_root, dest, sd_catalog,
-                    self.chk_folders_last_var.get(), self.chk_recent_var.get()
+                    self._opt("chk_folders_last_var", False), self._opt("chk_recent_var", False)
                 )
             else:
                 merged_name_map = persisted_name_map
@@ -1700,7 +1751,7 @@ class SyncApp(ctk.CTk):
 
             self._copy_gbcsys_payload(gbcsys, dest, os_folder)
 
-            if self.chk_restore_var.get():
+            if self._opt("chk_restore_var", False):
                 restore_base = source if (source and os.path.isdir(source)) else hacks
                 if restore_base and os.path.isdir(restore_base):
                     self.restore_saves(restore_base, dest, os_folder)
@@ -1716,8 +1767,7 @@ class SyncApp(ctk.CTk):
             else:
                 self.log_msg("Sync Complete!")
                 ejected = False
-                eject_var = getattr(self, "chk_eject_var", None)
-                if eject_var and eject_var.get():
+                if self._opt("chk_eject_var", False):
                     ejected = self.eject_sd(dest)
                 if ejected:
                     self.show_info("Success", "Sync complete! SD card ejected — safe to remove.")
@@ -1726,6 +1776,7 @@ class SyncApp(ctk.CTk):
             sync_ok = True
 
         except SyncCancelled:
+            self.had_error = True
             self.log_msg("Sync cancelled by user.")
             self.show_info(
                 "Cancelled",
@@ -1733,6 +1784,7 @@ class SyncApp(ctk.CTk):
                 " — run a sync again to finish."
             )
         except Exception as e:  # pylint: disable=broad-exception-caught
+            self.had_error = True
             self.log_msg(f"ERROR: {str(e)}")
             self.show_error("Error", str(e))
         finally:
@@ -1901,9 +1953,7 @@ class SyncApp(ctk.CTk):
         merged_map: Dict[str, str], backup_root: Optional[str] = None
     ) -> None:
         """Warn about SD saves with no matching ROM; optionally archive them to the PC."""
-        orphans_var = getattr(self, "chk_orphans_var", None)
-        archive = bool(orphans_var.get()) if orphans_var else False
-        archive = archive and backup_root is not None
+        archive = self._opt("chk_orphans_var", False) and backup_root is not None
 
         def _handle(path, label):
             if archive:
@@ -1923,7 +1973,8 @@ class SyncApp(ctk.CTk):
                 if SyncApp._fuzzy_match_rom(stem, merged_map) is None:
                     _handle(os.path.join(gamedata, folder), f"save folder '{folder}'")
         else:
-            for save_dir in [save_base, rtc_base]:
+            save_dirs = list(dict.fromkeys([save_base, rtc_base]))
+            for save_dir in save_dirs:
                 sp = os.path.join(dest, os_folder, save_dir)
                 if not os.path.isdir(sp):
                     continue

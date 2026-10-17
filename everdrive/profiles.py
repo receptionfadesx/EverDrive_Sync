@@ -83,12 +83,21 @@ def load_config_file(path):
 
 
 def save_config_file(path, config):
-    """Write *config* to *path*. Returns True on success, False if unwritable."""
+    """Write *config* to *path* atomically. Returns True on success, False if unwritable."""
+    tmp_path = f"{path}.tmp.{os.getpid()}"
     try:
-        with open(path, "w", encoding="utf-8") as f:
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
         return True
     except OSError:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
         return False
 
 

@@ -32,7 +32,9 @@ def get_clean_rom_name(base_name, preserve_tags=False):
         clean = re.sub(r'\s*\[[^\]]+\]\s*', ' ', clean)
 
     # Strip accents
-    clean = unicodedata.normalize('NFKD', clean).encode('ascii', 'ignore').decode('ascii')
+    clean_ascii = unicodedata.normalize('NFKD', clean).encode('ascii', 'ignore').decode('ascii')
+    if clean_ascii.strip():
+        clean = clean_ascii
 
     clean = sanitize_fat32(clean)
     clean = re.sub(r'_+', ' ', clean)
@@ -43,7 +45,7 @@ def get_clean_rom_name(base_name, preserve_tags=False):
         clean = match.group(1) + ", The"
 
     final = (clean + suffix).strip()
-    return final if final else base_name
+    return sanitize_fat32(final) if final else sanitize_fat32(base_name)
 
 
 def get_fuzzy_title(base_name):
@@ -65,10 +67,6 @@ def get_best_region_games(files, usa=True, world=True, eur=True, jpn=True):
         grouped[clean].append(f)
 
     for clean, group in grouped.items():
-        if len(group) == 1:
-            best_games.append(group[0])
-            continue
-
         best_game = None
         best_score = 999
 
@@ -149,32 +147,42 @@ def get_series_groups(files):
                 assigned.add(str(f.absolute()))
                 break
 
-    prefix_files = {}
     unassigned = [f for f in files if str(f.absolute()) not in assigned]
+    if len(unassigned) < 2:
+        return mapping
 
-    for f1, f2 in itertools.combinations(unassigned, 2):
-        if not isinstance(f1, Path) or not isinstance(f2, Path):
+    file_info = []
+    for f in unassigned:
+        if not isinstance(f, Path):
             continue
-        n1 = re.sub(r'\s*[:-].*', '', get_clean_rom_name(f1.stem))
-        n2 = re.sub(r'\s*[:-].*', '', get_clean_rom_name(f2.stem))
-        w1 = [w for w in re.split(r'[\s_]+', n1) if w.strip()]
-        w2 = [w for w in re.split(r'[\s_]+', n2) if w.strip()]
+        n = re.sub(r'\s*[:-].*', '', get_clean_rom_name(f.stem))
+        w = [word for word in re.split(r'[\s_]+', n) if word.strip()]
+        file_info.append((f, str(f.absolute()), w))
 
-        lcp = []
-        for k in range(min(len(w1), len(w2))):
-            if w1[k].lower() == w2[k].lower():
-                lcp.append(w1[k])
-            else:
-                break
+    buckets = {}
+    for f, abs_path, w in file_info:
+        if len(w) >= 2:
+            key = (w[0].lower(), w[1].lower())
+            buckets.setdefault(key, []).append((abs_path, w))
 
-        if len(lcp) >= 2:
-            prefix = " ".join(lcp)
-            if prefix not in prefix_files:
-                prefix_files[prefix] = set()
-            curr_set = prefix_files.get(prefix)
-            if curr_set is not None:
-                curr_set.add(str(f1.absolute()))
-                curr_set.add(str(f2.absolute()))
+    prefix_files = {}
+    for bucket in buckets.values():
+        if len(bucket) < 2:
+            continue
+        for (abs1, w1), (abs2, w2) in itertools.combinations(bucket, 2):
+            lcp = []
+            for k in range(min(len(w1), len(w2))):
+                if w1[k].lower() == w2[k].lower():
+                    lcp.append(w1[k])
+                else:
+                    break
+
+            if len(lcp) >= 2:
+                prefix = " ".join(lcp)
+                if prefix not in prefix_files:
+                    prefix_files[prefix] = set()
+                prefix_files[prefix].add(abs1)
+                prefix_files[prefix].add(abs2)
 
     valid = [(p, len(p.split(" ")), f_set) for p, f_set in prefix_files.items()]
     sorted_pref = sorted(valid, key=lambda x: (x[1], -len(x[2])))

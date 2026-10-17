@@ -21,6 +21,14 @@ from everdrive import (  # noqa: F401  # pylint: disable=unused-import
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
+        if sys.platform == "win32":
+            import ctypes
+            if ctypes.windll.kernel32.AttachConsole(-1):
+                try:
+                    sys.stdout = open("CONOUT$", "w", encoding="utf-8")
+                    sys.stderr = open("CONOUT$", "w", encoding="utf-8")
+                except OSError:
+                    pass
         sys.exit(run_cli())
     app = SyncApp()
     app.mainloop()
