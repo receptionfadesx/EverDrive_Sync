@@ -23,12 +23,29 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         if sys.platform == "win32":
             import ctypes
-            if ctypes.windll.kernel32.AttachConsole(-1):
+            import msvcrt
+            kernel32 = ctypes.windll.kernel32
+            h_out = kernel32.GetStdHandle(-11)
+            if h_out and h_out != -1:
                 try:
-                    sys.stdout = open("CONOUT$", "w", encoding="utf-8")
-                    sys.stderr = open("CONOUT$", "w", encoding="utf-8")
+                    fd = msvcrt.open_osfhandle(h_out, 0)
+                    sys.stdout = open(fd, "w", encoding="utf-8", closefd=False)
                 except OSError:
                     pass
+            h_err = kernel32.GetStdHandle(-12)
+            if h_err and h_err != -1:
+                try:
+                    fd = msvcrt.open_osfhandle(h_err, 0)
+                    sys.stderr = open(fd, "w", encoding="utf-8", closefd=False)
+                except OSError:
+                    pass
+            if sys.stdout is None or getattr(sys.stdout, "closed", False):
+                if kernel32.AttachConsole(-1):
+                    try:
+                        sys.stdout = open("CONOUT$", "w", encoding="utf-8")
+                        sys.stderr = open("CONOUT$", "w", encoding="utf-8")
+                    except OSError:
+                        pass
         sys.exit(run_cli())
     app = SyncApp()
     app.mainloop()
