@@ -49,7 +49,8 @@ def get_clean_rom_name(base_name, preserve_tags=False):
 
 
 def get_fuzzy_title(base_name):
-    t = re.sub(r'\s*\([^)]+\)\s*', ' ', base_name)
+    t = re.sub(r'^!+\s*', '', base_name)
+    t = re.sub(r'\s*\([^)]+\)\s*', ' ', t)
     t = re.sub(r'\s*\[[^\]]+\]\s*', ' ', t)
     t = re.sub(r'[-_]', ' ', t)
     t = re.sub(r'\s+', ' ', t)

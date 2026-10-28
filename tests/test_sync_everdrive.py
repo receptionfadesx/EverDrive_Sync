@@ -1921,3 +1921,235 @@ def test_extract_zips_zip_slip_prevention(tmp_path):
     assert (Path(temp_dir) / "good.gb").exists()
     assert not (Path(temp_dir).parent / "evil.gb").exists()
     shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_case_only_save_rename(tmp_path):
+    dest = tmp_path / "sd"
+    save_dir = dest / "EDGB" / "SAVE"
+    save_dir.mkdir(parents=True)
+    (save_dir / "zelda.sav").write_text("save data")
+
+    app = MockSyncApp(dest=str(dest))
+    app.rename_sd_saves(str(dest), "EDGB", "SAVE", "RTC", {"zelda": "Zelda"})
+
+    entries = os.listdir(save_dir)
+    assert "Zelda.sav" in entries
+    assert not any("destination already exists" in msg for msg in app.logs)
+
+    # GBA Pro case-only rename
+    gba_dir = dest / "edgba" / "gamedata" / "metroid.gba"
+    gba_dir.mkdir(parents=True)
+    (gba_dir / "metroid.sav").write_text("pro save")
+    app.rename_sd_saves(str(dest), "edgba", "SAVE", "SAVE", {"metroid": "Metroid"})
+    assert "Metroid.gba" in os.listdir(dest / "edgba" / "gamedata")
+    assert "Metroid.sav" in os.listdir(dest / "edgba" / "gamedata" / "Metroid.gba")
+
+
+def test_bypass_mode_excludes_saves_backup_and_junk(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+
+    (source / "game1.gb").write_text("rom")
+    (source / ".DS_Store").write_text("junk")
+    (source / "._game1.gb").write_text("junk")
+    (source / "Saves_Backup").mkdir()
+    (source / "Saves_Backup" / "old.sav").write_text("backup")
+
+    app = MockSyncApp(source=str(source), dest=str(dest), reorg=False, backups=False)
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    assert (dest / "game1.gb").exists()
+    assert not (dest / "Saves_Backup").exists()
+    assert not (dest / ".DS_Store").exists()
+    assert not (dest / "._game1.gb").exists()
+
+
+def test_short_favorite_title_not_flagged_as_orphan(tmp_path):
+    assert get_fuzzy_title("! X") == "x"
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB" / "SAVE").mkdir(parents=True)
+
+    (source / "X.gbc").write_text("rom")
+    (source / "favorites.txt").write_text("X\n")
+    (dest / "EDGB" / "SAVE" / "X.sav").write_text("save data")
+
+    app = MockSyncApp(source=str(source), dest=str(dest), fav=True, orphans=True)
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    assert (dest / "GBC" / "! X.gbc").exists()
+    assert (dest / "EDGB" / "SAVE" / "! X.sav").exists()
+    assert not (source / "Saves_Backup" / "Orphaned").exists()
+
+
+def test_free_space_check_respects_1g1r(tmp_path):
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+
+    # 3 region variants @ 5000 bytes each = 15000 bytes total, but 1G1R keeps only 1 (5000 bytes)
+    (source / "Game (USA).gbc").write_bytes(b"a" * 5000)
+    (source / "Game (Europe).gbc").write_bytes(b"b" * 5000)
+    (source / "Game (Japan).gbc").write_bytes(b"c" * 5000)
+
+    app = MockSyncApp(source=str(source), dest=str(dest), backups=False)
+    app.chk_1g1r_var = type('MockVar', (), {'get': lambda *a: True})()
+
+    from unittest.mock import patch, Mock
+    with patch('everdrive.sync_app.shutil.disk_usage',
+               return_value=Mock(total=20000, used=10000, free=8000)), \
+         patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    assert (dest / "GBC").exists()
+
+
+def test_dat_rejects_entity_declarations(tmp_path):
+    from sync_everdrive import load_dat_index
+    bad_dat = tmp_path / "entity.dat"
+    bad_dat.write_text(
+        '<?xml version="1.0"?><!DOCTYPE datafile [<!ENTITY lol "lol">]>'
+        '<datafile><game><rom name="A.gb" crc="12345678"/></game></datafile>'
+    )
+    with pytest.raises(ValueError, match="ENTITY"):
+        load_dat_index(str(bad_dat))
+
+
+
+def test_sync_temp_removed_before_eject(tmp_path):
+    """Ensure .sync_temp is deleted BEFORE eject_sd is called so unmounting never leaves .sync_temp behind."""
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+
+    (source / "Tetris (World).gb").write_bytes(b"T" * 1024)
+    # Pre-existing ROM on SD so .sync_temp gets created during _prepare_sd_catalog
+    (dest / "Old_Tetris.gb").write_bytes(b"T" * 1024)
+
+    app = MockSyncApp(source=str(source), dest=str(dest), eject=True, backups=False)
+    sync_temp_during_eject = []
+
+    def fake_eject(d):
+        sync_temp_during_eject.append((Path(d) / ".sync_temp").exists())
+        return True
+
+    app.eject_sd = fake_eject
+
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    assert sync_temp_during_eject == [False], ".sync_temp was still present when eject_sd ran!"
+    assert not (dest / ".sync_temp").exists()
+
+
+def test_catalog_sd_ignores_os_folders(tmp_path):
+    """ROM-like files inside EverDrive OS folders (e.g. GBCSYS/EDGB/GBASYS) must never be moved to .sync_temp."""
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    os_dir = dest / "GBCSYS"
+    os_dir.mkdir()
+    os_rom = os_dir / "menu.gbc"
+    os_rom.write_bytes(b"OS_MENU_ROM")
+
+    (source / "Mario (USA).gbc").write_bytes(b"MARIO_ROM")
+
+    app = MockSyncApp(source=str(source), dest=str(dest), backups=False)
+
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    assert os_rom.exists() and os_rom.read_bytes() == b"OS_MENU_ROM"
+    assert not (dest / ".sync_temp").exists()
+
+
+def test_leftover_empty_sync_temp_removed(tmp_path):
+    """Any leftover .sync_temp directory from a previous run must be removed on a successful sync."""
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    source.mkdir()
+    dest.mkdir()
+    (dest / "EDGB").mkdir()
+    leftover = dest / ".sync_temp"
+    leftover.mkdir()
+    (leftover / "stale.tmp").write_bytes(b"stale")
+
+    (source / "Zelda (USA).gbc").write_bytes(b"ZELDA_ROM")
+
+    app = MockSyncApp(source=str(source), dest=str(dest), backups=False)
+
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    assert not leftover.exists()
+
+
+def test_gbcsys_payload_unwraps_nested_os_folder(tmp_path):
+    """When gbcsys points to a parent folder containing ED64/ or GBCSYS/, unwrap it instead of creating ED64/ED64."""
+    source = tmp_path / "source"
+    dest = tmp_path / "sd_card"
+    payload = tmp_path / "OS-V3.11"
+    source.mkdir()
+    dest.mkdir()
+    payload.mkdir()
+
+    # SD card has ED64 folder (and an accidental nested ED64/ED64 from an earlier run)
+    (dest / "ED64").mkdir()
+    (dest / "ED64" / "ED64").mkdir()
+    (dest / "ED64" / "ED64" / "stale.txt").write_text("stale")
+
+    # Payload folder is the outer extracted archive containing ED64/OS64.v64
+    (payload / "ED64").mkdir()
+    (payload / "ED64" / "OS64.v64").write_bytes(b"OS64_BOOT")
+    (payload / "ED64" / "emu").mkdir()
+    (payload / "ED64" / "emu" / "nes.v64").write_bytes(b"NES_EMU")
+
+    (source / "Super Mario 64 (USA).z64").write_bytes(b"SM64_ROM")
+
+    app = MockSyncApp(source=str(source), dest=str(dest), gbcsys=str(payload), backups=False)
+
+    from unittest.mock import patch
+    with patch('tkinter.messagebox.showinfo'), \
+         patch('tkinter.messagebox.showerror') as mock_error, \
+         patch('tkinter.messagebox.askokcancel', return_value=True):
+        app.run_sync()
+        mock_error.assert_not_called()
+
+    assert (dest / "ED64" / "OS64.v64").read_bytes() == b"OS64_BOOT"
+    assert (dest / "ED64" / "emu" / "nes.v64").read_bytes() == b"NES_EMU"
+    assert not (dest / "ED64" / "ED64").exists()
