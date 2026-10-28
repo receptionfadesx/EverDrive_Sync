@@ -5,6 +5,9 @@ import xml.etree.ElementTree as ET
 
 def load_dat_index(dat_path):
     """Parse a Logiqx XML DAT file. Returns {crc32_hex_lower: rom_name}."""
+    with open(dat_path, "rb") as f:
+        if b"<!ENTITY" in f.read(65536).upper():
+            raise ValueError("DAT/XML files with custom ENTITY declarations are not allowed.")
     try:
         tree = ET.parse(dat_path)
     except ET.ParseError as e:

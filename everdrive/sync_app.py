@@ -892,8 +892,10 @@ class SyncApp(ctk.CTk):
         catalog: Dict[int, List[Tuple[int, str]]] = {}
         if os.path.isdir(dest):
             self.log_msg("Cataloging SD card for quick moves...")
-            for root, _, filenames in os.walk(dest):
-                if any(x in root.split(os.sep) for x in ["System Volume Information"]):
+            os_folders = SYSTEM_FOLDERS - {".sync_temp"}
+            for root, dirs, filenames in os.walk(dest):
+                dirs[:] = [d for d in dirs if d.lower() not in os_folders]
+                if any(x.lower() in os_folders for x in Path(root).parts):
                     continue
                 for f in filenames:
                     if os.path.splitext(f.lower())[1] in rom_exts:
@@ -936,9 +938,27 @@ class SyncApp(ctk.CTk):
 
         Keeps save filenames in lockstep with the prefixed ROM filename so the
         EverDrive OS still pairs them."""
-        if favs and get_fuzzy_title(os.path.splitext(name)[0]) in favs:
+        if favs and not name.startswith("! ") and get_fuzzy_title(os.path.splitext(name)[0]) in favs:
             return "! " + name
         return name
+
+    @staticmethod
+    def _can_rename_to(src: str, dst: str) -> bool:
+        """True if dst does not exist or only differs in casing from src."""
+        return (
+            not os.path.exists(dst)
+            or os.path.basename(src).lower() == os.path.basename(dst).lower()
+        )
+
+    @staticmethod
+    def _do_rename(src: str, dst: str) -> None:
+        """Rename src to dst, using a two-step rename for case-only changes on FAT32/Windows/macOS."""
+        if os.path.basename(src).lower() == os.path.basename(dst).lower() and os.path.exists(dst):
+            tmp = f"{src}.__case_tmp_{os.getpid()}"
+            os.rename(src, tmp)
+            os.rename(tmp, dst)
+        else:
+            os.rename(src, dst)
 
     def rename_sd_saves(
         self, dest: str, os_folder: str, save_base: str, rtc_base: str,
@@ -982,22 +1002,22 @@ class SyncApp(ctk.CTk):
                     if f_stem.lower() == stem.lower():
                         new_f_name = SyncApp._fav_prefixed(matched + f_ext, favs)
                         new_f_path = os.path.join(item_path, new_f_name)
-                        if not os.path.exists(new_f_path):
+                        if f != new_f_name and SyncApp._can_rename_to(f_path, new_f_path):
                             if getattr(self, "dry_run", False):
                                 self.log_msg(f" -> [DRY RUN] Would rename: {f} -> {new_f_name}")
                             else:
-                                os.rename(f_path, new_f_path)
+                                SyncApp._do_rename(f_path, new_f_path)
                             _stat_bump(self, "renamed")
             if item != new_folder_name:
                 new_folder_path = os.path.join(gamedata_path, new_folder_name)
-                if not os.path.exists(new_folder_path):
+                if SyncApp._can_rename_to(item_path, new_folder_path):
                     if getattr(self, "dry_run", False):
                         self.log_msg(
                             f" -> [DRY RUN] Would rename GBA PRO folder: {item} -> {new_folder_name}"
                         )
                     else:
                         self.log_msg(f" -> Renaming GBA PRO folder: {item} -> {new_folder_name}")
-                        os.rename(item_path, new_folder_path)
+                        SyncApp._do_rename(item_path, new_folder_path)
                     _stat_bump(self, "renamed")
 
     def _rename_standard_saves(
@@ -1029,12 +1049,12 @@ class SyncApp(ctk.CTk):
                 )
                 if f != new_name:
                     new_full = os.path.join(sp, new_name)
-                    if not os.path.exists(new_full):
+                    if SyncApp._can_rename_to(full, new_full):
                         if getattr(self, "dry_run", False):
                             self.log_msg(f" -> [DRY RUN] Would rename SD save: {f} -> {new_name}")
                         else:
                             self.log_msg(f" -> Renaming SD save: {f} -> {new_name}")
-                            os.rename(full, new_full)
+                            SyncApp._do_rename(full, new_full)
                         _stat_bump(self, "renamed")
                     else:
                         self.log_msg(
@@ -1065,6 +1085,8 @@ class SyncApp(ctk.CTk):
             os.makedirs(dest, exist_ok=True)
         for item in os.listdir(src):
             check_cancel(self)
+            if item.lower() == "saves_backup" or item == ".DS_Store" or item.startswith("._"):
+                continue
             s = os.path.join(src, item)
             d = os.path.join(dest, item)
             if os.path.isdir(s):
@@ -1168,15 +1190,37 @@ class SyncApp(ctk.CTk):
         except OSError:
             return True  # can't determine — proceed
         required = 0
+        rom_exts_all = {".gb", ".gbc", ".gba", ".z64", ".n64", ".v64"}
+        use_1g1r = self._opt("chk_reorganize_var", True) and self._opt("chk_1g1r_var", False)
         for base in (source, hacks):
             if not (base and os.path.isdir(base)):
                 continue
+            roms_in_base = []
             for p in Path(base).rglob("*"):
                 try:
-                    if p.is_file() and "Saves_Backup" not in p.parts:
+                    if not p.is_file():
+                        continue
+                    if any(pt.lower() == "saves_backup" for pt in p.parts):
+                        continue
+                    if p.name == ".DS_Store" or p.name.startswith("._"):
+                        continue
+                    if use_1g1r and p.suffix.lower() in rom_exts_all:
+                        roms_in_base.append(p)
+                    else:
                         required += p.stat().st_size
                 except OSError:
                     continue
+            if roms_in_base:
+                kept = get_best_region_games(
+                    roms_in_base,
+                    self._opt("chk_usa_var", True), self._opt("chk_world_var", True),
+                    self._opt("chk_eur_var", True), self._opt("chk_jpn_var", True)
+                )
+                for p in kept:
+                    try:
+                        required += p.stat().st_size
+                    except OSError:
+                        continue
         reclaimable = 0
         if self._opt("chk_reorganize_var", True):
             # Reorganise moves or deletes every non-system entry on the card,
@@ -1608,13 +1652,26 @@ class SyncApp(ctk.CTk):
         target_os_dir = os.path.join(dest, os_folder)
         if not self.dry_run:
             os.makedirs(target_os_dir, exist_ok=True)
-        for root, _, filenames in os.walk(gbcsys):
+        os_names = {"edgb", "gbos", "gbcsys", "ed64", "gbasys", "edgba", os_folder.lower()}
+        payload_root = gbcsys
+        try:
+            for entry in os.listdir(gbcsys):
+                sub = os.path.join(gbcsys, entry)
+                if os.path.isdir(sub) and entry.lower() in os_names:
+                    payload_root = sub
+                    break
+        except OSError:
+            pass
+        nested_os_dir = os.path.join(target_os_dir, os_folder)
+        if not self.dry_run and os.path.isdir(nested_os_dir):
+            shutil.rmtree(nested_os_dir, ignore_errors=True)
+        for root, _, filenames in os.walk(payload_root):
             check_cancel(self)
             for f in filenames:
                 if f.startswith("._") or f == ".DS_Store":
                     continue
                 src_file = os.path.join(root, f)
-                rel_path = os.path.relpath(src_file, gbcsys)
+                rel_path = os.path.relpath(src_file, payload_root)
                 target_path = os.path.join(target_os_dir, rel_path)
                 if os.path.exists(target_path):
                     try:
@@ -1756,7 +1813,9 @@ class SyncApp(ctk.CTk):
                 if restore_base and os.path.isdir(restore_base):
                     self.restore_saves(restore_base, dest, os_folder)
 
+            sync_ok = True
             if not self.dry_run:
+                self._remove_sync_temp(dest, temp_sd_dir)
                 self.mac_cleanup(dest)
 
             self._log_summary()
@@ -1773,7 +1832,6 @@ class SyncApp(ctk.CTk):
                     self.show_info("Success", "Sync complete! SD card ejected — safe to remove.")
                 else:
                     self.show_info("Success", "Sync complete! Safely eject your SD card.")
-            sync_ok = True
 
         except SyncCancelled:
             self.had_error = True
@@ -1790,11 +1848,11 @@ class SyncApp(ctk.CTk):
         finally:
             if temp_unzip_dir and os.path.exists(temp_unzip_dir):
                 shutil.rmtree(temp_unzip_dir)
-            if temp_sd_dir and os.path.exists(temp_sd_dir):
-                if sync_ok:
-                    # Anything still staged here has no source counterpart —
-                    # removing it is the mirror-delete step.
-                    shutil.rmtree(temp_sd_dir, ignore_errors=True)
+            if sync_ok and not self.dry_run:
+                self._remove_sync_temp(dest, temp_sd_dir)
+            elif temp_sd_dir and os.path.exists(temp_sd_dir):
+                if False:
+                    pass
                 else:
                     # Cancelled or failed: keep the staged ROMs so nothing on
                     # the SD is lost — the next sync re-catalogs and reuses them.
@@ -1807,6 +1865,30 @@ class SyncApp(ctk.CTk):
             self._write_sync_report(source, hacks)
             self.after(0, lambda: self.toggle_ui(True))
             self.after(0, lambda: self.progress_bar.set(0))
+
+    def _remove_sync_temp(self, dest, temp_sd_dir=None):
+        """Remove .sync_temp from the SD card before ejecting so it never breaks EverDrive boot."""
+        candidates = {os.path.join(dest, ".sync_temp")}
+        if temp_sd_dir:
+            candidates.add(temp_sd_dir)
+        for path in candidates:
+            if not path or not os.path.exists(path):
+                continue
+            for root, dirs, files in os.walk(path, topdown=False):
+                for name in files:
+                    fp = os.path.join(root, name)
+                    try:
+                        os.chmod(fp, 0o666)
+                        os.remove(fp)
+                    except OSError:
+                        pass
+                for name in dirs:
+                    dp = os.path.join(root, name)
+                    try:
+                        os.rmdir(dp)
+                    except OSError:
+                        pass
+            shutil.rmtree(path, ignore_errors=True)
 
     def _write_sync_report(self, source, hacks):
         """Persist the session log next to the save backups for post-sync auditing."""
